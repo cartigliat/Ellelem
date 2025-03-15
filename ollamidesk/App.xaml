@@ -4,6 +4,8 @@
              xmlns:local="clr-namespace:ollamidesk"
              StartupUri="MainWindow.xaml">
 	<Application.Resources>
-
+		<BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+		<local:InverseBooleanToVisibilityConverter x:Key="NotProcessedToVisibilityConverter"/>
+		<local:StatusColorConverter x:Key="StatusColorConverter"/>
 	</Application.Resources>
 </Application>

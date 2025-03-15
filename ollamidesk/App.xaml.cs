@@ -9,11 +9,16 @@ namespace ollamidesk;
 /// </summary>
 public partial class App : Application
 {
-    // You can add application-level event handlers here if needed
-    // For example:
-    // protected override void OnStartup(StartupEventArgs e)
-    // {
-    //     base.OnStartup(e);
-    //     // Your startup code here
-    // }
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+
+        // Add global exception handling
+        Current.DispatcherUnhandledException += (s, args) =>
+        {
+            MessageBox.Show($"An unhandled exception occurred: {args.Exception.Message}",
+                "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            args.Handled = true;
+        };
+    }
 }

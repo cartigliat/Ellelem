@@ -1,0 +1,96 @@
+<Window x:Class="ollamidesk.RAG.Diagnostics.RagDiagnosticWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="RAG Diagnostics Tool" Height="600" Width="800">
+	<Grid>
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto"/>
+			<RowDefinition Height="*"/>
+			<RowDefinition Height="Auto"/>
+		</Grid.RowDefinitions>
+
+		<!-- Controls -->
+		<StackPanel Grid.Row="0" Orientation="Horizontal" Margin="10">
+			<Button x:Name="StartButton" Content="Start Diagnostics" Click="StartButton_Click" Width="120" Margin="0,0,10,0"/>
+			<Button x:Name="StopButton" Content="Stop Diagnostics" Click="StopButton_Click" Width="120" Margin="0,0,10,0" IsEnabled="False"/>
+			<ComboBox x:Name="LevelComboBox" Width="120" Margin="0,0,10,0">
+				<ComboBoxItem Content="Debug" IsSelected="True"/>
+				<ComboBoxItem Content="Info"/>
+				<ComboBoxItem Content="Warning"/>
+				<ComboBoxItem Content="Error"/>
+				<ComboBoxItem Content="Critical"/>
+			</ComboBox>
+			<Button x:Name="ClearButton" Content="Clear Log" Click="ClearButton_Click" Width="80" Margin="0,0,10,0"/>
+			<Button x:Name="SaveButton" Content="Save Log" Click="SaveButton_Click" Width="80"/>
+		</StackPanel>
+
+		<!-- Log Viewer -->
+		<TabControl Grid.Row="1" Margin="10">
+			<TabItem Header="Logs">
+				<TextBox x:Name="LogTextBox" 
+                         IsReadOnly="True" 
+                         VerticalScrollBarVisibility="Auto" 
+                         HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas"
+                         FontSize="12"/>
+			</TabItem>
+			<TabItem Header="Performance">
+				<TextBox x:Name="PerformanceTextBox"
+                         IsReadOnly="True"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas"
+                         FontSize="12"/>
+			</TabItem>
+			<TabItem Header="Tests">
+				<Grid>
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto"/>
+						<RowDefinition Height="*"/>
+					</Grid.RowDefinitions>
+
+					<StackPanel Grid.Row="0" Margin="10">
+						<TextBlock Text="RAG Diagnostic Tests" FontWeight="Bold" Margin="0,0,0,10"/>
+
+						<StackPanel Orientation="Horizontal" Margin="0,5">
+							<Button x:Name="TestEmbeddingButton" Content="Test Embedding API" 
+                                    Click="TestEmbeddingButton_Click" Width="150" Margin="0,0,10,0"/>
+							<TextBlock x:Name="EmbeddingStatusText" VerticalAlignment="Center"/>
+						</StackPanel>
+
+						<StackPanel Orientation="Horizontal" Margin="0,5">
+							<Button x:Name="TestModelButton" Content="Test Ollama API" 
+                                    Click="TestModelButton_Click" Width="150" Margin="0,0,10,0"/>
+							<TextBlock x:Name="ModelStatusText" VerticalAlignment="Center"/>
+						</StackPanel>
+
+						<StackPanel Orientation="Horizontal" Margin="0,5">
+							<Button x:Name="TestVectorStoreButton" Content="Test Vector Store" 
+                                    Click="TestVectorStoreButton_Click" Width="150" Margin="0,0,10,0"/>
+							<TextBlock x:Name="VectorStoreStatusText" VerticalAlignment="Center"/>
+						</StackPanel>
+
+						<StackPanel Orientation="Horizontal" Margin="0,5">
+							<Button x:Name="TestChunkingButton" Content="Test Document Chunking" 
+                                    Click="TestChunkingButton_Click" Width="150" Margin="0,0,10,0"/>
+							<TextBlock x:Name="ChunkingStatusText" VerticalAlignment="Center"/>
+						</StackPanel>
+					</StackPanel>
+
+					<TextBox Grid.Row="1" x:Name="TestResultsTextBox"
+                             IsReadOnly="True"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas"
+                             FontSize="12"
+                             Margin="10"/>
+				</Grid>
+			</TabItem>
+		</TabControl>
+
+		<!-- Status Bar -->
+		<StatusBar Grid.Row="2">
+			<TextBlock x:Name="StatusText" Text="Ready"/>
+		</StatusBar>
+	</Grid>
+</Window>
