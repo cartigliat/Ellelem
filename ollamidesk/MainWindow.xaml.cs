@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Data;
+using System.Windows.Media.Animation;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
 using ollamidesk.RAG.ViewModels;
@@ -31,6 +32,9 @@ namespace ollamidesk
 
             // Enable RAG diagnostics
             _ragHelper = this.EnableRagDiagnostics();
+
+            // Setup initial RAG panel state
+            UpdateRagPanelVisibility(_viewModel.DocumentViewModel.IsRagEnabled);
         }
 
         private void InitializeServices()
@@ -139,7 +143,6 @@ namespace ollamidesk
 
                 // Disable input and show loading indicator
                 UserInputTextBox.IsEnabled = false;
-                SendButton.IsEnabled = false;
                 LoadingIndicator.Visibility = Visibility.Visible;
 
                 // IMPORTANT: Clear the input box right away for better UX
@@ -287,7 +290,6 @@ namespace ollamidesk
                 await Dispatcher.InvokeAsync(() =>
                 {
                     UserInputTextBox.IsEnabled = true;
-                    SendButton.IsEnabled = true;
                     LoadingIndicator.Visibility = Visibility.Collapsed;
                     UserInputTextBox.Focus();
                 });
@@ -341,24 +343,15 @@ namespace ollamidesk
                 $"Window DataContext type: {DataContext?.GetType().Name ?? "null"}");
         }
 
-        private async void UserInputTextBox_KeyDown(object sender, KeyEventArgs e)
+        private async void UserInputTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
         {
-            // Allow sending message with Shift+Enter (new line) or Ctrl+Enter
             if (e.Key == Key.Enter)
             {
-                // Check if Shift or Ctrl is pressed
-                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ||
-                    Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+                e.Handled = true;
+
+                // Send the message
+                if (!string.IsNullOrWhiteSpace(UserInputTextBox.Text))
                 {
-                    // Insert new line
-                    int caretIndex = UserInputTextBox.SelectionStart;
-                    UserInputTextBox.Text = UserInputTextBox.Text.Insert(caretIndex, Environment.NewLine);
-                    UserInputTextBox.SelectionStart = caretIndex + Environment.NewLine.Length;
-                }
-                else
-                {
-                    // Send message
-                    e.Handled = true;
                     if (_viewModel != null)
                     {
                         await _viewModel.SendMessageAsync();
@@ -371,17 +364,7 @@ namespace ollamidesk
             }
         }
 
-        private async void SendButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (_viewModel != null)
-            {
-                await _viewModel.SendMessageAsync();
-            }
-            else
-            {
-                await Task.Run(SendMessage);
-            }
-        }
+
 
         // Add cleanup for resources when closing
         protected override void OnClosed(EventArgs e)
@@ -390,6 +373,34 @@ namespace ollamidesk
 
             // Clean up RAG diagnostics
             _ragHelper?.Cleanup();
+        }
+
+        // Simple RAG panel visibility handlers
+
+        private void RagEnableCheckBox_Checked(object sender, RoutedEventArgs e)
+        {
+            // Show the RAG panel
+            RagPanel.Visibility = Visibility.Visible;
+
+            // Log that RAG was enabled
+            RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow", "RAG enabled by user");
+        }
+
+        private void RagEnableCheckBox_Unchecked(object sender, RoutedEventArgs e)
+        {
+            // Hide the RAG panel
+            RagPanel.Visibility = Visibility.Collapsed;
+
+            // Log that RAG was disabled
+            RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow", "RAG disabled by user");
+        }
+
+        private void UpdateRagPanelVisibility(bool isVisible)
+        {
+            if (RagPanel == null) return;
+
+            // Simple visibility toggle without animation
+            RagPanel.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 
