@@ -219,7 +219,7 @@ namespace ollamidesk.RAG.ViewModels
                 {
                     _document.IsSelected = value;
                     // Save the document when selection changes
-                    Task.Run(async () =>
+                    _ = Task.Run(async () =>
                     {
                         try
                         {

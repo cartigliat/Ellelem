@@ -17,11 +17,11 @@ namespace ollamidesk.Configuration
         /// Initializes a new instance of the ConfigurationProvider class
         /// </summary>
         /// <param name="configFilePath">Path to the configuration file</param>
-        public ConfigurationProvider(string configFilePath = null)
+        public ConfigurationProvider(string? configFilePath = null)
         {
             _configFilePath = configFilePath ?? Path.Combine(
                 AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
-            
+
             // Initialize with default settings
             _settings = new AppSettings();
         }
@@ -75,12 +75,16 @@ namespace ollamidesk.Configuration
             try
             {
                 // Create directory if it doesn't exist
-                Directory.CreateDirectory(Path.GetDirectoryName(_configFilePath));
+                string? directoryPath = Path.GetDirectoryName(_configFilePath);
+                if (!string.IsNullOrEmpty(directoryPath))
+                {
+                    Directory.CreateDirectory(directoryPath);
+                }
 
                 // Serialize settings with indented formatting
                 var options = new JsonSerializerOptions { WriteIndented = true };
                 string json = JsonSerializer.Serialize(_settings, options);
-                
+
                 File.WriteAllText(_configFilePath, json);
             }
             catch (Exception ex)

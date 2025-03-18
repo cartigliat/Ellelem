@@ -5,6 +5,7 @@ using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
 using ollamidesk.RAG.ViewModels;
+using ollamidesk.Services;
 
 namespace ollamidesk.DependencyInjection
 {
@@ -13,7 +14,12 @@ namespace ollamidesk.DependencyInjection
     /// </summary>
     public class ServiceProviderFactory
     {
-        private static IServiceProvider _serviceProvider;
+        private static IServiceProvider? _serviceProvider;
+
+        /// <summary>
+        /// Gets whether the service provider has been initialized
+        /// </summary>
+        public static bool IsInitialized => _serviceProvider != null;
 
         /// <summary>
         /// Gets the service provider
@@ -47,6 +53,11 @@ namespace ollamidesk.DependencyInjection
 
             // Initialize diagnostics
             InitializeDiagnostics();
+
+            // Log initialization
+            var diagnostics = _serviceProvider.GetService<RagDiagnosticsService>();
+            diagnostics?.Log(DiagnosticLevel.Info, "ServiceProviderFactory",
+                "Dependency injection container initialized");
         }
 
         /// <summary>
@@ -55,6 +66,9 @@ namespace ollamidesk.DependencyInjection
         /// <param name="services">The service collection</param>
         private static void RegisterServices(IServiceCollection services)
         {
+            // Register utility services
+            services.AddTransient<CommandLineService>();
+
             // Register repositories and services
             services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>();
             services.AddSingleton<IVectorStore, FileSystemVectorStore>();
@@ -65,7 +79,7 @@ namespace ollamidesk.DependencyInjection
             services.AddSingleton<OllamaModelFactory>();
 
             // Register default model
-            services.AddTransient(sp => 
+            services.AddTransient(sp =>
             {
                 var factory = sp.GetRequiredService<OllamaModelFactory>();
                 var settings = sp.GetRequiredService<OllamaSettings>();
@@ -75,6 +89,11 @@ namespace ollamidesk.DependencyInjection
             // Register view models
             services.AddSingleton<DocumentViewModel>();
             services.AddSingleton<MainViewModel>();
+
+            // Register UI components
+            services.AddTransient<MainWindow>();
+            services.AddTransient<SideMenuWindow>();
+            services.AddTransient<RagDiagnosticWindow>();
 
             // Register diagnostics
             services.AddSingleton<RagDiagnosticsService>();
@@ -102,32 +121,12 @@ namespace ollamidesk.DependencyInjection
         /// <returns>The service instance</returns>
         public static T GetService<T>() where T : class
         {
+            if (!IsInitialized)
+            {
+                throw new InvalidOperationException("Service provider not initialized");
+            }
+
             return ServiceProvider.GetService<T>() ?? throw new InvalidOperationException($"Service of type {typeof(T).Name} not registered");
-        }
-    }
-
-    /// <summary>
-    /// Factory for creating OllamaModel instances
-    /// </summary>
-    public class OllamaModelFactory
-    {
-        private readonly OllamaSettings _settings;
-        private readonly RagDiagnosticsService _diagnostics;
-
-        public OllamaModelFactory(OllamaSettings settings, RagDiagnosticsService diagnostics)
-        {
-            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
-        }
-
-        /// <summary>
-        /// Creates an OllamaModel with the specified model name
-        /// </summary>
-        /// <param name="modelName">The name of the model to create</param>
-        /// <returns>An IOllamaModel instance</returns>
-        public IOllamaModel CreateModel(string modelName)
-        {
-            return new OllamaModel(modelName, _settings, _diagnostics);
         }
     }
 }

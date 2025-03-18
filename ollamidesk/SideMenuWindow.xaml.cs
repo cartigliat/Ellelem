@@ -8,6 +8,7 @@ using System.Windows;
 using ollamidesk.DependencyInjection;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.Transition;
+using ollamidesk.Services;
 
 namespace ollamidesk
 {
@@ -15,22 +16,49 @@ namespace ollamidesk
     {
         private readonly OllamaModelFactory? _modelFactory;
         private readonly RagDiagnosticsService _diagnostics;
+        private readonly CommandLineService? _commandLineService;
 
         public string? SelectedModel { get; private set; }
         public string? LoadedDocument { get; private set; }
 
         // Legacy constructor for backward compatibility
         public SideMenuWindow()
-            : this(null)
-        {
-        }
-
-        public SideMenuWindow(OllamaModelFactory? modelFactory)
         {
             InitializeComponent();
 
-            _modelFactory = modelFactory;
-            _diagnostics = LegacySupport.CreateDiagnosticsService();
+            // Try to get services from DI container if available
+            try
+            {
+                if (ServiceProviderFactory.IsInitialized)
+                {
+                    _modelFactory = ServiceProviderFactory.GetService<OllamaModelFactory>();
+                    _diagnostics = ServiceProviderFactory.GetService<RagDiagnosticsService>();
+                    _commandLineService = ServiceProviderFactory.GetService<CommandLineService>();
+                }
+                else
+                {
+                    _diagnostics = LegacySupport.CreateDiagnosticsService();
+                }
+            }
+            catch
+            {
+                _diagnostics = LegacySupport.CreateDiagnosticsService();
+            }
+
+            PopulateModelListAsync();
+        }
+
+        // New constructor with DI
+        public SideMenuWindow(
+            OllamaModelFactory modelFactory,
+            RagDiagnosticsService diagnostics,
+            CommandLineService commandLineService)
+        {
+            InitializeComponent();
+
+            _modelFactory = modelFactory ?? throw new ArgumentNullException(nameof(modelFactory));
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+            _commandLineService = commandLineService ?? throw new ArgumentNullException(nameof(commandLineService));
 
             PopulateModelListAsync();
         }
@@ -39,7 +67,19 @@ namespace ollamidesk
         {
             try
             {
-                string modelList = await ExecuteCommandAsync("ollama list");
+                string modelList;
+
+                if (_commandLineService != null)
+                {
+                    // Use the CommandLineService
+                    var result = await _commandLineService.ExecuteCommandAsync("cmd.exe", "/C ollama list");
+                    modelList = result.output;
+                }
+                else
+                {
+                    // Fall back to the utility class
+                    modelList = await ExecuteCommandAsync("ollama list");
+                }
 
                 // Split the output and skip the header line
                 string[] models = modelList.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
@@ -69,6 +109,7 @@ namespace ollamidesk
             }
         }
 
+        // Legacy method for use when CommandLineService is not available
         private async Task<string> ExecuteCommandAsync(string command)
         {
             try

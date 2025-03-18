@@ -252,7 +252,8 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Error, "MainViewModel",
                     $"Error sending message: {ex.Message}");
 
-                Application.Current.Dispatcher.InvokeAsync(() =>
+                // Use properly awaited async call by capturing the task or using discard
+                _ = Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 });

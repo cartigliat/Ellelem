@@ -12,27 +12,87 @@ using ollamidesk.RAG.ViewModels;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.Common.MVVM;
 using ollamidesk.Transition;
+using ollamidesk.DependencyInjection;
+using ollamidesk.Services;
 
 namespace ollamidesk
 {
     public partial class MainWindow : Window
     {
-        private MainViewModel _viewModel = null!; // Use null! to suppress warning, will be initialized in InitializeServices
+        // Remove readonly modifiers from fields that need assignment after construction
+        private MainViewModel _viewModel;
         private string? _loadedDocument;
-        private IOllamaModel? _selectedModel;
-        private MainWindowRagHelper _ragHelper = null!; // Will be initialized in constructor
-        private RagDiagnosticsService _diagnostics = null!; // Will be initialized in InitializeServices
+        private IOllamaModel _ollamaModel;
+        private MainWindowRagHelper _ragHelper;
+        private RagDiagnosticsService _diagnostics;
 
+        // Legacy constructor for backward compatibility
         public MainWindow()
         {
-            InitializeComponent();
-            InitializeServices();
+            // Initialize fields with default values to avoid warnings
+            _viewModel = null!;
+            _ollamaModel = null!;
+            _diagnostics = null!;
+            _ragHelper = null!;
 
-            // Enable RAG diagnostics
-            _ragHelper = this.EnableRagDiagnostics();
+            try
+            {
+                // If ServiceProviderFactory is initialized, use it
+                if (ServiceProviderFactory.IsInitialized)
+                {
+                    // Get services from DI container
+                    _viewModel = ServiceProviderFactory.GetService<MainViewModel>();
+                    _ollamaModel = ServiceProviderFactory.GetService<IOllamaModel>();
+                    _diagnostics = ServiceProviderFactory.GetService<RagDiagnosticsService>();
+
+                    InitializeComponent();
+                    InitializeWithDI();
+                }
+                else
+                {
+                    // Use legacy initialization
+                    InitializeComponent();
+                    InitializeServices();
+                }
+            }
+            catch (Exception)
+            {
+                // Fallback to legacy initialization
+                InitializeComponent();
+                InitializeServices();
+            }
+        }
+
+        // New constructor with DI
+        public MainWindow(
+            MainViewModel viewModel,
+            IOllamaModel ollamaModel,
+            RagDiagnosticsService diagnostics)
+        {
+            InitializeComponent();
+
+            _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+            _ollamaModel = ollamaModel ?? throw new ArgumentNullException(nameof(ollamaModel));
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+
+            _ragHelper = new MainWindowRagHelper(this, _diagnostics);
+            InitializeWithDI();
+        }
+
+        private void InitializeWithDI()
+        {
+            // Set data context
+            DataContext = _viewModel;
 
             // Setup initial RAG panel state
             UpdateRagPanelVisibility(_viewModel.DocumentViewModel.IsRagEnabled);
+
+            // Make sure the ChatHistoryItemsControl is bound to the ViewModel's ChatHistory
+            ChatHistoryItemsControl.ItemsSource = _viewModel.ChatHistory;
+
+            // Log initialization
+            _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
+                "Application initialized with RAG services");
         }
 
         private void InitializeServices()
@@ -72,13 +132,19 @@ namespace ollamidesk
             {
                 ModelName = "llama2" // Default model name
             };
-            _selectedModel = initialModel;
+            _ollamaModel = initialModel;
 
             // Set data context
             DataContext = _viewModel;
 
             // Make sure the ChatHistoryItemsControl is bound to the ViewModel's ChatHistory
             ChatHistoryItemsControl.ItemsSource = _viewModel.ChatHistory;
+
+            // Enable RAG diagnostics
+            _ragHelper = this.EnableRagDiagnostics();
+
+            // Setup initial RAG panel state
+            UpdateRagPanelVisibility(_viewModel.DocumentViewModel.IsRagEnabled);
 
             // Log initialization
             _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
@@ -88,7 +154,25 @@ namespace ollamidesk
         private void MenuToggleButton_Click(object sender, RoutedEventArgs e)
         {
             // Create a side menu window without requiring the model factory
-            SideMenuWindow sideMenuWindow = new SideMenuWindow();
+            SideMenuWindow sideMenuWindow;
+
+            try
+            {
+                // Try to create with DI
+                if (ServiceProviderFactory.IsInitialized)
+                {
+                    sideMenuWindow = ServiceProviderFactory.GetService<SideMenuWindow>();
+                }
+                else
+                {
+                    sideMenuWindow = new SideMenuWindow();
+                }
+            }
+            catch
+            {
+                // Fallback to direct instantiation
+                sideMenuWindow = new SideMenuWindow();
+            }
 
             if (sideMenuWindow.ShowDialog() == true)
             {
@@ -104,7 +188,27 @@ namespace ollamidesk
                         ModelNameTextBlock.Text = newModelName;
 
                         // Load the selected model
-                        var selectedModel = OllamaModelLoader.LoadModel(newModelName);
+                        IOllamaModel selectedModel;
+
+                        try
+                        {
+                            // Try to use DI factory
+                            if (ServiceProviderFactory.IsInitialized)
+                            {
+                                var factory = ServiceProviderFactory.GetService<OllamaModelFactory>();
+                                selectedModel = factory.CreateModel(newModelName);
+                            }
+                            else
+                            {
+                                selectedModel = OllamaModelLoader.LoadModel(newModelName);
+                            }
+                        }
+                        catch
+                        {
+                            // Fallback to legacy loader
+                            selectedModel = OllamaModelLoader.LoadModel(newModelName);
+                        }
+
                         _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
                             $"Model changed to: {newModelName}");
 

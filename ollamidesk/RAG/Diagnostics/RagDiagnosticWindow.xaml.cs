@@ -11,34 +11,70 @@ using Microsoft.Win32;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
 using ollamidesk.Transition;
+using ollamidesk.DependencyInjection;
 
 namespace ollamidesk.RAG.Diagnostics
 {
     public partial class RagDiagnosticWindow : Window
     {
-        private readonly DispatcherTimer _logUpdateTimer;
-        private readonly DispatcherTimer _perfUpdateTimer;
+        private DispatcherTimer _logUpdateTimer;
+        private DispatcherTimer _perfUpdateTimer;
         private string _lastLogContent = string.Empty;
         private readonly RagDiagnosticsService _diagnostics;
 
-        private readonly IEmbeddingService? _embeddingService;
-        private readonly IOllamaModel? _ollamaModel;
-        private readonly IVectorStore? _vectorStore;
-        private readonly RagService? _ragService;
+        // Remove readonly modifiers from these fields since they need to be assigned after construction
+        private IEmbeddingService? _embeddingService;
+        private IOllamaModel? _ollamaModel;
+        private IVectorStore? _vectorStore;
+        private RagService? _ragService;
 
         // Legacy constructor for backward compatibility
         public RagDiagnosticWindow()
-            : this(LegacySupport.CreateDiagnosticsService())
         {
+            InitializeComponent();
+
+            // Initialize timer fields to avoid nullable warnings
+            _logUpdateTimer = null!;
+            _perfUpdateTimer = null!;
+
+            try
+            {
+                // Try to use DI if available
+                if (ServiceProviderFactory.IsInitialized)
+                {
+                    _diagnostics = ServiceProviderFactory.GetService<RagDiagnosticsService>();
+                }
+                else
+                {
+                    _diagnostics = LegacySupport.CreateDiagnosticsService();
+                }
+            }
+            catch
+            {
+                _diagnostics = LegacySupport.CreateDiagnosticsService();
+            }
+
+            InitializeTimers();
+            GetServiceInstances();
         }
 
-        // New constructor with DI
+        // Constructor with DI
         public RagDiagnosticWindow(RagDiagnosticsService diagnostics)
         {
             InitializeComponent();
 
+            // Initialize timer fields to avoid nullable warnings
+            _logUpdateTimer = null!;
+            _perfUpdateTimer = null!;
+
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
+            InitializeTimers();
+            GetServiceInstances();
+        }
+
+        private void InitializeTimers()
+        {
             // Setup timers for log updates
             _logUpdateTimer = new DispatcherTimer
             {
@@ -51,11 +87,47 @@ namespace ollamidesk.RAG.Diagnostics
                 Interval = TimeSpan.FromSeconds(5)
             };
             _perfUpdateTimer.Tick += PerfUpdateTimer_Tick;
+        }
 
-            // Try to get service instances from application
+        private void GetServiceInstances()
+        {
             try
             {
-                var mainWindow = System.Windows.Application.Current.MainWindow as MainWindow;
+                if (ServiceProviderFactory.IsInitialized)
+                {
+                    // Get services from the DI container
+                    _embeddingService = ServiceProviderFactory.GetService<IEmbeddingService>();
+                    _ollamaModel = ServiceProviderFactory.GetService<IOllamaModel>();
+                    _vectorStore = ServiceProviderFactory.GetService<IVectorStore>();
+                    _ragService = ServiceProviderFactory.GetService<RagService>();
+
+                    if (_embeddingService != null && _ollamaModel != null &&
+                        _vectorStore != null && _ragService != null)
+                    {
+                        StatusText.Text = "Connected to application services via DI";
+                    }
+                    else
+                    {
+                        // Fallback to trying to get services from MainWindow
+                        TryGetServicesFromMainWindow();
+                    }
+                }
+                else
+                {
+                    TryGetServicesFromMainWindow();
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = "Error connecting to services: " + ex.Message;
+            }
+        }
+
+        private void TryGetServicesFromMainWindow()
+        {
+            try
+            {
+                var mainWindow = Application.Current.MainWindow as MainWindow;
                 if (mainWindow != null)
                 {
                     // Try to access services using reflection or other means
@@ -649,7 +721,7 @@ It should be processed correctly by the chunking algorithm.";
             try
             {
                 // Try to access the model from the main window
-                var modelField = mainWindow.GetType().GetField("_selectedModel",
+                var modelField = mainWindow.GetType().GetField("_ollamaModel",
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
                 if (modelField != null)
