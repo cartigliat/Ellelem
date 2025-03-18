@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Linq;
+using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
 
@@ -14,26 +15,32 @@ namespace ollamidesk
     {
         private readonly string _modelName;
         private readonly HttpClient _httpClient;
-        private const string OllamaApiUrl = "http://localhost:11434/api/generate";
-        private const int MaxRetries = 3;
-        private const int RetryDelayMs = 1000;
+        private readonly string _apiUrl;
+        private readonly int _maxRetries;
+        private readonly int _retryDelayMs;
         private readonly string _systemPrompt;
+        private readonly RagDiagnosticsService _diagnostics;
 
-        public OllamaModel(string modelName)
+        public OllamaModel(string modelName, OllamaSettings settings, RagDiagnosticsService diagnostics)
         {
-            _modelName = modelName;
-            _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromSeconds(60); // Increase timeout for larger responses
+            _modelName = modelName ?? throw new ArgumentNullException(nameof(modelName));
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
-            _systemPrompt = "You are a helpful AI assistant. If context information is provided, use it to answer the question accurately. " +
-                "If there are multiple relevant pieces of information, synthesize them into a coherent answer. " +
-                "If you don't know the answer based on the provided context, say you don't have enough information.";
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            _apiUrl = settings.ApiGenerateEndpoint;
+            _maxRetries = settings.MaxRetries;
+            _retryDelayMs = settings.RetryDelayMs;
+            _systemPrompt = settings.SystemPrompt;
+
+            _httpClient = new HttpClient();
+            _httpClient.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
         }
 
         public async Task<string> GenerateResponseAsync(string userInput, string loadedDocument, List<string> chatHistory)
         {
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("GenerateResponse");
+            _diagnostics.StartOperation("GenerateResponse");
 
             try
             {
@@ -43,7 +50,7 @@ namespace ollamidesk
                 // Add document context if available
                 if (!string.IsNullOrEmpty(loadedDocument))
                 {
-                    diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
+                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
                         $"Adding document context (length: {loadedDocument.Length} chars)");
                     prompt = $"Context information:\n{loadedDocument}\n\nQuestion: {userInput}";
                 }
@@ -51,7 +58,7 @@ namespace ollamidesk
                 // Add chat history for context
                 if (chatHistory != null && chatHistory.Count > 0)
                 {
-                    diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
+                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
                         $"Including {chatHistory.Count} chat history messages for context");
                 }
 
@@ -76,19 +83,18 @@ namespace ollamidesk
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "OllamaModel", $"Error generating response: {ex.Message}");
+                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel", $"Error generating response: {ex.Message}");
                 return $"An error occurred: {ex.Message}";
             }
             finally
             {
-                diagnostics.EndOperation("GenerateResponse");
+                _diagnostics.EndOperation("GenerateResponse");
             }
         }
 
         public async Task<string> GenerateResponseWithContextAsync(string userInput, List<string> chatHistory, List<DocumentChunk> relevantChunks)
         {
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("GenerateResponseWithContext");
+            _diagnostics.StartOperation("GenerateResponseWithContext");
 
             try
             {
@@ -97,7 +103,7 @@ namespace ollamidesk
                 // Add relevant chunks
                 if (relevantChunks != null && relevantChunks.Any())
                 {
-                    diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
+                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
                         $"Building context with {relevantChunks.Count} chunks");
 
                     contextBuilder.AppendLine("Context information:");
@@ -113,14 +119,14 @@ namespace ollamidesk
                 }
                 else
                 {
-                    diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
+                    _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
                         "GenerateResponseWithContext called but no relevant chunks provided");
                     contextBuilder.Append(userInput);
                 }
 
                 // Log the full context being sent
                 string fullContext = contextBuilder.ToString();
-                diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
+                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
                     $"Full context length: {fullContext.Length} characters");
 
                 // Create the request
@@ -144,40 +150,39 @@ namespace ollamidesk
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
+                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
                     $"Error generating response with context: {ex.Message}");
                 return $"An error occurred while processing your question with document context: {ex.Message}";
             }
             finally
             {
-                diagnostics.EndOperation("GenerateResponseWithContext");
+                _diagnostics.EndOperation("GenerateResponseWithContext");
             }
         }
 
         private async Task<string> SendRequestToOllamaAsync(string jsonContent)
         {
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("OllamaApiRequest");
+            _diagnostics.StartOperation("OllamaApiRequest");
 
             try
             {
                 var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-                diagnostics.LogApiRequest("OllamaModel", OllamaApiUrl,
+                _diagnostics.LogApiRequest("OllamaModel", _apiUrl,
                     jsonContent.Length > 500 ? jsonContent.Substring(0, 500) + "..." : jsonContent);
 
-                for (int attempt = 1; attempt <= MaxRetries; attempt++)
+                for (int attempt = 1; attempt <= _maxRetries; attempt++)
                 {
                     try
                     {
                         // Send request to the Ollama API
-                        var response = await _httpClient.PostAsync(OllamaApiUrl, content);
+                        var response = await _httpClient.PostAsync(_apiUrl, content);
 
                         // Check if the request was successful
                         if (response.IsSuccessStatusCode)
                         {
                             // Read and parse JSON response
                             string jsonResponse = await response.Content.ReadAsStringAsync();
-                            diagnostics.LogApiResponse("OllamaModel", OllamaApiUrl,
+                            _diagnostics.LogApiResponse("OllamaModel", _apiUrl,
                                 jsonResponse.Length > 500 ? jsonResponse.Substring(0, 500) + "..." : jsonResponse,
                                 true);
 
@@ -188,20 +193,20 @@ namespace ollamidesk
                                 if (doc.RootElement.TryGetProperty("response", out var responseElement))
                                 {
                                     string responseText = responseElement.GetString() ?? "No response received";
-                                    diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
+                                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
                                         $"Response generated successfully (length: {responseText.Length} chars)");
                                     return responseText;
                                 }
                                 else
                                 {
-                                    diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
+                                    _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
                                         "Unexpected API response format - no 'response' field");
                                     return "Error: Unexpected API response format";
                                 }
                             }
                             catch (JsonException ex)
                             {
-                                diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
+                                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
                                     $"Invalid JSON response: {ex.Message}");
                                 return "Error: Invalid JSON response from Ollama API";
                             }
@@ -209,14 +214,14 @@ namespace ollamidesk
                         else
                         {
                             string errorContent = await response.Content.ReadAsStringAsync();
-                            diagnostics.LogApiResponse("OllamaModel", OllamaApiUrl, errorContent, false);
+                            _diagnostics.LogApiResponse("OllamaModel", _apiUrl, errorContent, false);
 
                             // Only retry for server errors (5xx)
-                            if ((int)response.StatusCode >= 500 && attempt < MaxRetries)
+                            if ((int)response.StatusCode >= 500 && attempt < _maxRetries)
                             {
-                                diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
+                                _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
                                     $"Server error on attempt {attempt}, will retry after delay: {response.StatusCode}");
-                                await Task.Delay(RetryDelayMs * attempt);
+                                await Task.Delay(_retryDelayMs * attempt);
                                 continue;
                             }
 
@@ -225,20 +230,20 @@ namespace ollamidesk
                     }
                     catch (TaskCanceledException)
                     {
-                        if (attempt < MaxRetries)
+                        if (attempt < _maxRetries)
                         {
-                            diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
+                            _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
                                 $"Request timeout on attempt {attempt}, will retry");
-                            await Task.Delay(RetryDelayMs * attempt);
+                            await Task.Delay(_retryDelayMs * attempt);
                             continue;
                         }
                         return "Error: Request to Ollama API timed out after multiple attempts";
                     }
-                    catch (Exception ex) when (attempt < MaxRetries)
+                    catch (Exception ex) when (attempt < _maxRetries)
                     {
-                        diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
+                        _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
                             $"Error on attempt {attempt}, will retry: {ex.Message}");
-                        await Task.Delay(RetryDelayMs * attempt);
+                        await Task.Delay(_retryDelayMs * attempt);
                     }
                 }
 
@@ -246,21 +251,20 @@ namespace ollamidesk
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
+                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
                     $"Unhandled exception in SendRequestToOllamaAsync: {ex.Message}");
                 return $"An error occurred: {ex.Message}";
             }
             finally
             {
-                diagnostics.EndOperation("OllamaApiRequest");
+                _diagnostics.EndOperation("OllamaApiRequest");
             }
         }
 
         // Helper method for testing the API connection
         public async Task<bool> TestConnectionAsync()
         {
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("TestModelConnection");
+            _diagnostics.StartOperation("TestModelConnection");
 
             try
             {
@@ -277,23 +281,23 @@ namespace ollamidesk
                 string jsonContent = JsonSerializer.Serialize(requestData);
                 var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-                var response = await _httpClient.PostAsync(OllamaApiUrl, content);
+                var response = await _httpClient.PostAsync(_apiUrl, content);
 
                 bool success = response.IsSuccessStatusCode;
-                diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
+                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
                     $"Connection test result: {(success ? "SUCCESS" : "FAILED")} - Status: {response.StatusCode}");
 
                 return success;
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
+                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
                     $"Connection test failed with exception: {ex.Message}");
                 return false;
             }
             finally
             {
-                diagnostics.EndOperation("TestModelConnection");
+                _diagnostics.EndOperation("TestModelConnection");
             }
         }
     }

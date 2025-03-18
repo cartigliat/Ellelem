@@ -11,6 +11,7 @@ namespace ollamidesk.RAG.Models
         public string Content { get; set; } = string.Empty;
         public DateTime DateAdded { get; set; } = DateTime.Now;
         public bool IsProcessed { get; set; }
+        public bool IsSelected { get; set; } // New property to persist selection state
         public List<DocumentChunk> Chunks { get; set; } = new List<DocumentChunk>();
     }
 

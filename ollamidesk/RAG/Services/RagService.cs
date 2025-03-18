@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
 
@@ -19,51 +20,57 @@ namespace ollamidesk.RAG.Services
         private readonly int _chunkOverlap;
         private readonly int _maxRetrievedChunks;
         private readonly float _minSimilarityScore;
+        private readonly RagDiagnosticsService _diagnostics;
 
         public RagService(
             IDocumentRepository documentRepository,
             IEmbeddingService embeddingService,
             IVectorStore vectorStore,
-            int chunkSize = 500,
-            int chunkOverlap = 100,
-            int maxRetrievedChunks = 5,
-            float minSimilarityScore = 0.1f)
+            RagSettings ragSettings,
+            RagDiagnosticsService diagnostics)
         {
             _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
             _embeddingService = embeddingService ?? throw new ArgumentNullException(nameof(embeddingService));
             _vectorStore = vectorStore ?? throw new ArgumentNullException(nameof(vectorStore));
-            _chunkSize = chunkSize;
-            _chunkOverlap = chunkOverlap;
-            _maxRetrievedChunks = maxRetrievedChunks;
-            _minSimilarityScore = minSimilarityScore;
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+
+            if (ragSettings == null)
+                throw new ArgumentNullException(nameof(ragSettings));
+
+            _chunkSize = ragSettings.ChunkSize;
+            _chunkOverlap = ragSettings.ChunkOverlap;
+            _maxRetrievedChunks = ragSettings.MaxRetrievedChunks;
+            _minSimilarityScore = ragSettings.MinSimilarityScore;
+
+            _diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                $"Service initialized with settings: ChunkSize={_chunkSize}, ChunkOverlap={_chunkOverlap}, " +
+                $"MaxRetrievedChunks={_maxRetrievedChunks}, MinSimilarityScore={_minSimilarityScore}");
         }
 
         public async Task<List<Document>> GetAllDocumentsAsync()
         {
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("GetAllDocuments");
+            _diagnostics.StartOperation("GetAllDocuments");
 
             try
             {
                 var documents = await _documentRepository.GetAllDocumentsAsync();
-                diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Retrieved {documents.Count} documents");
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Retrieved {documents.Count} documents");
                 return documents;
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "RagService", $"Failed to get all documents: {ex.Message}");
+                _diagnostics.Log(DiagnosticLevel.Error, "RagService", $"Failed to get all documents: {ex.Message}");
                 throw;
             }
             finally
             {
-                diagnostics.EndOperation("GetAllDocuments");
+                _diagnostics.EndOperation("GetAllDocuments");
             }
         }
 
         public async Task<Document> AddDocumentAsync(string filePath)
         {
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("AddDocument");
+            _diagnostics.StartOperation("AddDocument");
 
             try
             {
@@ -72,7 +79,7 @@ namespace ollamidesk.RAG.Services
                     throw new FileNotFoundException($"File not found: {filePath}");
                 }
 
-                diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Adding document: {filePath}");
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Adding document: {filePath}");
 
                 // Try to determine file type and read accordingly
                 string content;
@@ -101,12 +108,12 @@ namespace ollamidesk.RAG.Services
                     case ".pdf":
                         // For PDF, you would need a proper PDF reader
                         // For now, treat as plain text but log the need for PDF handling
-                        diagnostics.Log(DiagnosticLevel.Warning, "RagService",
+                        _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
                             "PDF handling is not implemented, treating as text");
                         content = await File.ReadAllTextAsync(filePath);
                         break;
                     default:
-                        diagnostics.Log(DiagnosticLevel.Warning, "RagService",
+                        _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
                             $"Unknown file type: {extension}, treating as text");
                         content = await File.ReadAllTextAsync(filePath);
                         break;
@@ -119,34 +126,34 @@ namespace ollamidesk.RAG.Services
                     Name = name,
                     FilePath = filePath,
                     Content = content,
-                    IsProcessed = false
+                    IsProcessed = false,
+                    IsSelected = false // Initialize as not selected
                 };
 
                 await _documentRepository.SaveDocumentAsync(document);
-                diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService",
                     $"Document added with ID: {document.Id}, size: {content.Length} characters");
 
                 return document;
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "RagService", $"Failed to add document: {ex.Message}");
+                _diagnostics.Log(DiagnosticLevel.Error, "RagService", $"Failed to add document: {ex.Message}");
                 throw;
             }
             finally
             {
-                diagnostics.EndOperation("AddDocument");
+                _diagnostics.EndOperation("AddDocument");
             }
         }
 
         public async Task<Document> ProcessDocumentAsync(string documentId)
         {
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("ProcessDocument");
+            _diagnostics.StartOperation("ProcessDocument");
 
             try
             {
-                diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Processing document: {documentId}");
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Processing document: {documentId}");
 
                 var document = await _documentRepository.GetDocumentByIdAsync(documentId);
                 if (document == null)
@@ -155,16 +162,16 @@ namespace ollamidesk.RAG.Services
                 }
 
                 // Create chunks
-                diagnostics.StartOperation("DocumentChunking");
+                _diagnostics.StartOperation("DocumentChunking");
                 document.Chunks = ChunkDocument(document.Content, document.Id, document.Name);
-                diagnostics.EndOperation("DocumentChunking");
+                _diagnostics.EndOperation("DocumentChunking");
 
-                diagnostics.LogDocumentChunking("RagService", document.Id, document.Chunks);
+                _diagnostics.LogDocumentChunking("RagService", document.Id, document.Chunks);
 
                 // If no chunks were created, handle this case
                 if (document.Chunks.Count == 0)
                 {
-                    diagnostics.Log(DiagnosticLevel.Warning, "RagService",
+                    _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
                         $"No chunks were created for document: {documentId}");
 
                     // Create at least one chunk with the entire content (if it's not too large)
@@ -178,7 +185,7 @@ namespace ollamidesk.RAG.Services
                             Source = document.Name
                         });
 
-                        diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                        _diagnostics.Log(DiagnosticLevel.Info, "RagService",
                             "Created a single chunk for the entire document");
                     }
                     else
@@ -199,13 +206,13 @@ namespace ollamidesk.RAG.Services
                             });
                         }
 
-                        diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                        _diagnostics.Log(DiagnosticLevel.Info, "RagService",
                             $"Created {document.Chunks.Count} fixed-size chunks as fallback");
                     }
                 }
 
                 // Generate embeddings for each chunk
-                diagnostics.StartOperation("GenerateChunkEmbeddings");
+                _diagnostics.StartOperation("GenerateChunkEmbeddings");
                 int processedChunks = 0;
                 foreach (var chunk in document.Chunks)
                 {
@@ -216,20 +223,20 @@ namespace ollamidesk.RAG.Services
 
                         if (processedChunks % 5 == 0)
                         {
-                            diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                            _diagnostics.Log(DiagnosticLevel.Info, "RagService",
                                 $"Generated embeddings for {processedChunks}/{document.Chunks.Count} chunks");
                         }
                     }
                     catch (Exception ex)
                     {
-                        diagnostics.Log(DiagnosticLevel.Error, "RagService",
+                        _diagnostics.Log(DiagnosticLevel.Error, "RagService",
                             $"Failed to generate embedding for chunk {chunk.Id}: {ex.Message}");
 
                         // Skip this chunk rather than failing the entire process
                         chunk.Embedding = new float[0]; // Empty embedding
                     }
                 }
-                diagnostics.EndOperation("GenerateChunkEmbeddings");
+                _diagnostics.EndOperation("GenerateChunkEmbeddings");
 
                 // Remove any chunks with empty embeddings
                 int originalCount = document.Chunks.Count;
@@ -237,41 +244,41 @@ namespace ollamidesk.RAG.Services
 
                 if (document.Chunks.Count < originalCount)
                 {
-                    diagnostics.Log(DiagnosticLevel.Warning, "RagService",
+                    _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
                         $"Removed {originalCount - document.Chunks.Count} chunks with empty embeddings");
                 }
 
                 document.IsProcessed = document.Chunks.Count > 0;
+                document.IsSelected = true; // Auto-select document after processing
 
                 // Save updated document
                 await _documentRepository.SaveDocumentAsync(document);
 
                 // Add vectors to store
-                diagnostics.StartOperation("AddVectorsToStore");
+                _diagnostics.StartOperation("AddVectorsToStore");
                 await _vectorStore.AddVectorsAsync(document.Chunks);
-                diagnostics.EndOperation("AddVectorsToStore");
+                _diagnostics.EndOperation("AddVectorsToStore");
 
-                diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService",
                     $"Document processed successfully: {document.Id}, {document.Chunks.Count} chunks indexed");
 
                 return document;
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "RagService", $"Failed to process document: {ex.Message}");
+                _diagnostics.Log(DiagnosticLevel.Error, "RagService", $"Failed to process document: {ex.Message}");
                 throw;
             }
             finally
             {
-                diagnostics.EndOperation("ProcessDocument");
+                _diagnostics.EndOperation("ProcessDocument");
             }
         }
 
         public async Task<(string augmentedPrompt, List<DocumentChunk> sources)> GenerateAugmentedPromptAsync(
             string query, List<string> selectedDocumentIds)
         {
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("GenerateAugmentedPrompt");
+            _diagnostics.StartOperation("GenerateAugmentedPrompt");
 
             try
             {
@@ -282,24 +289,24 @@ namespace ollamidesk.RAG.Services
 
                 if (selectedDocumentIds == null || selectedDocumentIds.Count == 0)
                 {
-                    diagnostics.Log(DiagnosticLevel.Warning, "RagService", "No documents selected for retrieval");
+                    _diagnostics.Log(DiagnosticLevel.Warning, "RagService", "No documents selected for retrieval");
                     return (query, new List<DocumentChunk>());
                 }
 
-                diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService",
                     $"Generating augmented prompt for query: \"{(query.Length > 50 ? query.Substring(0, 47) + "..." : query)}\"");
-                diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService",
                     $"Selected document IDs: {string.Join(", ", selectedDocumentIds)}");
 
                 // Generate embedding for query
-                diagnostics.StartOperation("QueryEmbeddingGeneration");
+                _diagnostics.StartOperation("QueryEmbeddingGeneration");
                 var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(query);
-                diagnostics.EndOperation("QueryEmbeddingGeneration");
+                _diagnostics.EndOperation("QueryEmbeddingGeneration");
 
                 // Search for similar chunks
-                diagnostics.StartOperation("VectorSearch");
+                _diagnostics.StartOperation("VectorSearch");
                 var searchResults = await _vectorStore.SearchAsync(queryEmbedding, _maxRetrievedChunks * 2); // Get more than needed
-                diagnostics.EndOperation("VectorSearch");
+                _diagnostics.EndOperation("VectorSearch");
 
                 // Filter by selected documents
                 searchResults = searchResults
@@ -309,17 +316,17 @@ namespace ollamidesk.RAG.Services
                     .ToList();
 
                 // Log the retrieved chunks and their scores
-                diagnostics.LogRetrievedChunks("RagService", query, searchResults);
+                _diagnostics.LogRetrievedChunks("RagService", query, searchResults);
 
                 if (searchResults.Count == 0)
                 {
-                    diagnostics.Log(DiagnosticLevel.Warning, "RagService",
+                    _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
                         "No relevant chunks found for the query");
                     return (query, new List<DocumentChunk>());
                 }
 
                 // Build augmented prompt
-                diagnostics.StartOperation("BuildAugmentedPrompt");
+                _diagnostics.StartOperation("BuildAugmentedPrompt");
                 var promptBuilder = new StringBuilder();
                 promptBuilder.AppendLine("You are an AI assistant using information from documents to answer questions. Use ONLY the following context information to answer the query at the end. If you don't know the answer based on the provided context, say you don't have enough information, but try to be helpful by suggesting what might be relevant.");
                 promptBuilder.AppendLine();
@@ -343,33 +350,32 @@ namespace ollamidesk.RAG.Services
                 promptBuilder.AppendLine("Answer: ");
 
                 string augmentedPrompt = promptBuilder.ToString();
-                diagnostics.EndOperation("BuildAugmentedPrompt");
+                _diagnostics.EndOperation("BuildAugmentedPrompt");
 
-                diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService",
                     $"Generated augmented prompt with {sources.Count} chunks (total length: {augmentedPrompt.Length} chars)");
 
                 return (augmentedPrompt, sources);
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "RagService",
+                _diagnostics.Log(DiagnosticLevel.Error, "RagService",
                     $"Failed to generate augmented prompt: {ex.Message}");
                 throw;
             }
             finally
             {
-                diagnostics.EndOperation("GenerateAugmentedPrompt");
+                _diagnostics.EndOperation("GenerateAugmentedPrompt");
             }
         }
 
         public async Task DeleteDocumentAsync(string documentId)
         {
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("DeleteDocument");
+            _diagnostics.StartOperation("DeleteDocument");
 
             try
             {
-                diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Deleting document: {documentId}");
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Deleting document: {documentId}");
 
                 // Remove from vector store
                 await _vectorStore.RemoveVectorsAsync(documentId);
@@ -377,26 +383,51 @@ namespace ollamidesk.RAG.Services
                 // Remove from repository
                 await _documentRepository.DeleteDocumentAsync(documentId);
 
-                diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Document deleted: {documentId}");
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Document deleted: {documentId}");
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "RagService", $"Failed to delete document: {ex.Message}");
+                _diagnostics.Log(DiagnosticLevel.Error, "RagService", $"Failed to delete document: {ex.Message}");
                 throw;
             }
             finally
             {
-                diagnostics.EndOperation("DeleteDocument");
+                _diagnostics.EndOperation("DeleteDocument");
+            }
+        }
+
+        // Update document selection state
+        public async Task UpdateDocumentSelectionAsync(string documentId, bool isSelected)
+        {
+            try
+            {
+                var document = await _documentRepository.GetDocumentByIdAsync(documentId);
+                if (document == null)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
+                        $"Document not found for selection update: {documentId}");
+                    return;
+                }
+
+                document.IsSelected = isSelected;
+                await _documentRepository.SaveDocumentAsync(document);
+
+                _diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                    $"Updated selection state for document {documentId} to {isSelected}");
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "RagService",
+                    $"Failed to update document selection: {ex.Message}");
+                throw;
             }
         }
 
         private List<DocumentChunk> ChunkDocument(string content, string documentId, string source)
         {
-            var diagnostics = RagDiagnostics.Instance;
-
             if (string.IsNullOrWhiteSpace(content))
             {
-                diagnostics.Log(DiagnosticLevel.Warning, "RagService",
+                _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
                     $"Empty content for document {documentId}");
                 return new List<DocumentChunk>();
             }
@@ -406,7 +437,7 @@ namespace ollamidesk.RAG.Services
             bool hasHeaders = Regex.IsMatch(content, @"^#{1,6}\s+.+$", RegexOptions.Multiline);
             bool hasLists = Regex.IsMatch(content, @"^\s*[-*+]\s+.+$", RegexOptions.Multiline);
 
-            diagnostics.Log(DiagnosticLevel.Debug, "RagService",
+            _diagnostics.Log(DiagnosticLevel.Debug, "RagService",
                 $"Document {documentId} structure: HasCodeBlocks={hasCodeBlocks}, HasHeaders={hasHeaders}, HasLists={hasLists}");
 
             // Choose chunking strategy based on content type
@@ -484,6 +515,7 @@ namespace ollamidesk.RAG.Services
 
         private List<DocumentChunk> ChunkStructuredDocument(string content, string documentId, string source)
         {
+            // Implementation details unchanged - just returning the chunking method
             // Identify headers as splitting points
             var headerMatches = Regex.Matches(content, @"^(#{1,6}\s+.+)$", RegexOptions.Multiline);
 
@@ -544,6 +576,7 @@ namespace ollamidesk.RAG.Services
 
         private List<DocumentChunk> ChunkCodeDocument(string content, string documentId, string source)
         {
+            // Implementation details unchanged - just returning the chunking method
             // Try to identify classes, functions, and methods
             var codeBlockMatches = Regex.Matches(content, @"```[\s\S]*?```|(?:public|private|protected|internal|static|class|void|function|def)\s+[\w<>]+\s*[\w<>]*\s*\([^)]*\)\s*(?::\s*\w+\s*)?\{");
 

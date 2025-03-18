@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 
 namespace ollamidesk.RAG.Services
@@ -12,15 +13,28 @@ namespace ollamidesk.RAG.Services
     {
         private readonly HttpClient _httpClient;
         private readonly string _modelName;
-        private const string OllamaApiUrl = "http://localhost:11434/api/embeddings";
-        private const int MaxRetries = 3;
-        private const int RetryDelayMs = 1000;
+        private readonly string _apiUrl;
+        private readonly int _maxRetries;
+        private readonly int _retryDelayMs;
+        private readonly RagDiagnosticsService _diagnostics;
 
-        public OllamaEmbeddingService(string modelName = "nomic-embed-text")
+        public OllamaEmbeddingService(OllamaSettings settings, RagDiagnosticsService diagnostics)
         {
-            _modelName = modelName;
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+
+            _modelName = settings.EmbeddingModel;
+            _apiUrl = settings.ApiEmbeddingsEndpoint;
+            _maxRetries = settings.MaxRetries;
+            _retryDelayMs = settings.RetryDelayMs;
+
             _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromSeconds(30); // Increase timeout
+            _httpClient.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+
+            _diagnostics.Log(DiagnosticLevel.Info, "OllamaEmbeddingService",
+                $"Initialized with model: {_modelName}, API URL: {_apiUrl}");
         }
 
         public async Task<float[]> GenerateEmbeddingAsync(string text)
@@ -30,8 +44,7 @@ namespace ollamidesk.RAG.Services
                 throw new ArgumentException("Text cannot be empty or whitespace", nameof(text));
             }
 
-            var diagnostics = RagDiagnostics.Instance;
-            diagnostics.StartOperation("GenerateEmbedding");
+            _diagnostics.StartOperation("GenerateEmbedding");
 
             try
             {
@@ -39,7 +52,7 @@ namespace ollamidesk.RAG.Services
                 string trimmedText = text;
                 if (text.Length > 8192)
                 {
-                    diagnostics.Log(DiagnosticLevel.Warning, "EmbeddingService",
+                    _diagnostics.Log(DiagnosticLevel.Warning, "EmbeddingService",
                         $"Text length ({text.Length}) exceeds 8192 characters. Trimming to 8192 characters.");
                     trimmedText = text.Substring(0, 8192);
                 }
@@ -48,20 +61,20 @@ namespace ollamidesk.RAG.Services
                 string jsonContent = JsonSerializer.Serialize(requestData);
                 var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-                diagnostics.LogApiRequest("EmbeddingService", OllamaApiUrl, jsonContent);
+                _diagnostics.LogApiRequest("EmbeddingService", _apiUrl, jsonContent);
 
-                for (int attempt = 1; attempt <= MaxRetries; attempt++)
+                for (int attempt = 1; attempt <= _maxRetries; attempt++)
                 {
                     try
                     {
                         // Send the request
-                        var response = await _httpClient.PostAsync(OllamaApiUrl, content);
+                        var response = await _httpClient.PostAsync(_apiUrl, content);
 
                         // Parse and return response on success
                         if (response.IsSuccessStatusCode)
                         {
                             string jsonResponse = await response.Content.ReadAsStringAsync();
-                            diagnostics.LogApiResponse("EmbeddingService", OllamaApiUrl,
+                            _diagnostics.LogApiResponse("EmbeddingService", _apiUrl,
                                 jsonResponse.Length > 1000 ? jsonResponse.Substring(0, 1000) + "..." : jsonResponse,
                                 true);
 
@@ -76,7 +89,7 @@ namespace ollamidesk.RAG.Services
                                 }
 
                                 float[] embeddingArray = embedding.ToArray();
-                                diagnostics.LogEmbeddingVector("EmbeddingService", text, embeddingArray);
+                                _diagnostics.LogEmbeddingVector("EmbeddingService", text, embeddingArray);
                                 return embeddingArray;
                             }
 
@@ -85,14 +98,14 @@ namespace ollamidesk.RAG.Services
 
                         // Handle API errors
                         string errorContent = await response.Content.ReadAsStringAsync();
-                        diagnostics.LogApiResponse("EmbeddingService", OllamaApiUrl, errorContent, false);
+                        _diagnostics.LogApiResponse("EmbeddingService", _apiUrl, errorContent, false);
 
                         // Only retry for server errors (5xx)
-                        if ((int)response.StatusCode >= 500 && attempt < MaxRetries)
+                        if ((int)response.StatusCode >= 500 && attempt < _maxRetries)
                         {
-                            diagnostics.Log(DiagnosticLevel.Warning, "EmbeddingService",
+                            _diagnostics.Log(DiagnosticLevel.Warning, "EmbeddingService",
                                 $"Server error on attempt {attempt}, will retry after delay: {response.StatusCode}");
-                            await Task.Delay(RetryDelayMs * attempt);
+                            await Task.Delay(_retryDelayMs * attempt);
                             continue;
                         }
 
@@ -101,20 +114,20 @@ namespace ollamidesk.RAG.Services
                     }
                     catch (TaskCanceledException)
                     {
-                        if (attempt < MaxRetries)
+                        if (attempt < _maxRetries)
                         {
-                            diagnostics.Log(DiagnosticLevel.Warning, "EmbeddingService",
+                            _diagnostics.Log(DiagnosticLevel.Warning, "EmbeddingService",
                                 $"Request timeout on attempt {attempt}, will retry");
-                            await Task.Delay(RetryDelayMs * attempt);
+                            await Task.Delay(_retryDelayMs * attempt);
                             continue;
                         }
                         throw new TimeoutException("Embedding API request timed out after multiple attempts");
                     }
-                    catch (Exception ex) when (ex is not HttpRequestException && attempt < MaxRetries)
+                    catch (Exception ex) when (ex is not HttpRequestException && attempt < _maxRetries)
                     {
-                        diagnostics.Log(DiagnosticLevel.Warning, "EmbeddingService",
+                        _diagnostics.Log(DiagnosticLevel.Warning, "EmbeddingService",
                             $"Error on attempt {attempt}, will retry: {ex.Message}");
-                        await Task.Delay(RetryDelayMs * attempt);
+                        await Task.Delay(_retryDelayMs * attempt);
                     }
                 }
 
@@ -122,13 +135,13 @@ namespace ollamidesk.RAG.Services
             }
             catch (Exception ex)
             {
-                diagnostics.Log(DiagnosticLevel.Error, "EmbeddingService",
+                _diagnostics.Log(DiagnosticLevel.Error, "EmbeddingService",
                     $"Failed to generate embedding: {ex.Message}");
                 throw;
             }
             finally
             {
-                diagnostics.EndOperation("GenerateEmbedding");
+                _diagnostics.EndOperation("GenerateEmbedding");
             }
         }
 
@@ -137,30 +150,29 @@ namespace ollamidesk.RAG.Services
         {
             try
             {
-                var diagnostics = RagDiagnostics.Instance;
-                diagnostics.StartOperation("TestEmbeddingConnection");
+                _diagnostics.StartOperation("TestEmbeddingConnection");
 
                 var requestData = new { model = _modelName, prompt = "test" };
                 string jsonContent = JsonSerializer.Serialize(requestData);
                 var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-                var response = await _httpClient.PostAsync(OllamaApiUrl, content);
+                var response = await _httpClient.PostAsync(_apiUrl, content);
 
                 bool success = response.IsSuccessStatusCode;
-                diagnostics.Log(DiagnosticLevel.Info, "EmbeddingService",
+                _diagnostics.Log(DiagnosticLevel.Info, "EmbeddingService",
                     $"Connection test result: {(success ? "SUCCESS" : "FAILED")} - Status: {response.StatusCode}");
 
                 return success;
             }
             catch (Exception ex)
             {
-                RagDiagnostics.Instance.Log(DiagnosticLevel.Error, "EmbeddingService",
+                _diagnostics.Log(DiagnosticLevel.Error, "EmbeddingService",
                     $"Connection test failed with exception: {ex.Message}");
                 return false;
             }
             finally
             {
-                RagDiagnostics.Instance.EndOperation("TestEmbeddingConnection");
+                _diagnostics.EndOperation("TestEmbeddingConnection");
             }
         }
     }

@@ -1,4 +1,7 @@
 using System;
+using ollamidesk.Configuration;
+using ollamidesk.RAG.Diagnostics;
+using ollamidesk.Transition;
 
 namespace ollamidesk
 {
@@ -6,7 +9,9 @@ namespace ollamidesk
     {
         public static IOllamaModel LoadModel(string modelName)
         {
-            return new OllamaModel(modelName);
+            var settings = LegacySupport.CreateOllamaSettings();
+            var diagnostics = LegacySupport.CreateDiagnosticsService();
+            return new OllamaModel(modelName, settings, diagnostics);
         }
     }
 }

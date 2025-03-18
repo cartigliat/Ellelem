@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using ollamidesk.Configuration;
+using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
 
 namespace ollamidesk.RAG.Services
@@ -15,20 +17,27 @@ namespace ollamidesk.RAG.Services
         private readonly string _documentsFolder;
         private readonly string _embeddingsFolder;
         private readonly Dictionary<string, Document> _documentsCache = new();
+        private readonly RagDiagnosticsService _diagnostics;
         private bool _isInitialized = false;
 
-        public FileSystemDocumentRepository(string? basePath = null)
+        public FileSystemDocumentRepository(StorageSettings storageSettings, RagDiagnosticsService diagnostics)
         {
-            _basePath = basePath ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OllamaDesk");
-            _metadataFile = Path.Combine(_basePath, "library.json");
-            _documentsFolder = Path.Combine(_basePath, "documents");
-            _embeddingsFolder = Path.Combine(_basePath, "embeddings");
+            if (storageSettings == null)
+                throw new ArgumentNullException(nameof(storageSettings));
+
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+
+            _basePath = storageSettings.BasePath;
+            _metadataFile = storageSettings.MetadataFile;
+            _documentsFolder = storageSettings.DocumentsFolder;
+            _embeddingsFolder = storageSettings.EmbeddingsFolder;
 
             Directory.CreateDirectory(_basePath);
             Directory.CreateDirectory(_documentsFolder);
             Directory.CreateDirectory(_embeddingsFolder);
+
+            _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
+                $"Repository initialized with base path: {_basePath}");
         }
 
         private async Task EnsureInitializedAsync()
@@ -50,9 +59,14 @@ namespace ollamidesk.RAG.Services
                             _documentsCache[doc.Id] = doc;
                         }
                     }
+
+                    _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
+                        $"Loaded {_documentsCache.Count} documents from metadata file");
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
+                        $"Error loading document metadata: {ex.Message}");
                     // If we can't read the file, start with an empty cache
                 }
             }
@@ -62,8 +76,19 @@ namespace ollamidesk.RAG.Services
 
         private async Task SaveMetadataAsync()
         {
-            string json = JsonSerializer.Serialize(_documentsCache.Values.ToList());
-            await File.WriteAllTextAsync(_metadataFile, json);
+            try
+            {
+                string json = JsonSerializer.Serialize(_documentsCache.Values.ToList());
+                await File.WriteAllTextAsync(_metadataFile, json);
+
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
+                    "Metadata saved successfully");
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
+                    $"Error saving metadata: {ex.Message}");
+            }
         }
 
         public async Task<List<Document>> GetAllDocumentsAsync()
@@ -81,6 +106,8 @@ namespace ollamidesk.RAG.Services
                 return document;
             }
 
+            _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
+                $"Document with ID {id} not found");
             throw new KeyNotFoundException($"Document with ID {id} not found");
         }
 
@@ -105,6 +132,9 @@ namespace ollamidesk.RAG.Services
 
             // Update metadata
             await SaveMetadataAsync();
+
+            _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
+                $"Document saved: {document.Id}, Name: {document.Name}, Size: {document.Content.Length} chars");
         }
 
         public async Task DeleteDocumentAsync(string id)
@@ -132,6 +162,14 @@ namespace ollamidesk.RAG.Services
 
                 // Update metadata
                 await SaveMetadataAsync();
+
+                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
+                    $"Document deleted: {id}");
+            }
+            else
+            {
+                _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
+                    $"Attempted to delete non-existent document: {id}");
             }
         }
 
@@ -151,6 +189,8 @@ namespace ollamidesk.RAG.Services
                 }
             }
 
+            _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
+                $"Chunk with ID {chunkId} not found");
             throw new KeyNotFoundException($"Chunk with ID {chunkId} not found");
         }
     }

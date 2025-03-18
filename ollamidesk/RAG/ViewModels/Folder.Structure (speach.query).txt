@@ -1,0 +1,47 @@
+ollamidesk/
+├── Common/
+│   └── MWM/
+│       ├── CollectionHelper.cs
+│       ├── RelayCommand.cs
+│       └── ViewModelBase.cs
+├── RAG/
+|    |--IRAGProvider.cs
+│   ├── Diagnostics/
+│   │   ├── RagDiagnostics.cs
+│   │   ├── RagDiagnosticWindow.xaml
+│   │   └── RagDiagnosticWindow.xaml.cs
+│   ├── Models/
+│   │   ├── ChatMessage.cs
+│   │   └── Document.cs
+│   ├── Services/
+│   │   ├── FileSystemDocumentRepository.cs
+│   │   ├── FileSystemVectorStore.cs
+│   │   ├── IDocumentRespository.cs
+│   │   ├── IEmbeddingService.cs
+│   │   ├── InMemoryVectorStore.cs
+│   │   ├── IVectorStore.cs
+│   │   ├── OllamaEmbeddingService.cs
+│   │   └── RagService.cs
+│   ├── ViewModels/
+│   │   ├── DocumentLibraryView.xaml.cs
+│   │   ├── DocumentViewModels.cs
+│   │   └── MainViewModels.cs
+│   └── Views/
+│       └── DocumentLibraryView.xaml
+├── App.xaml
+├── App.xaml.cs
+├── AssemblyInfo.cs
+├── CommandLineUtil.cs
+├── Converters.cs
+├── IOllamaModel.cs
+├── MainViewExtensions.cs
+├── MainWindow.xaml
+├── MainWindow.xaml.cs
+├── MainWindowRagHelper.cs
+├── OllamaModel.cs
+├── OllamaModelLoader.cs
+├── ollamidesk.csproj
+├── SideMenuWindow.xaml
+├── SideMenuWindow.xaml.cs
+├── .gitignore
+└── ollamidesk.sln

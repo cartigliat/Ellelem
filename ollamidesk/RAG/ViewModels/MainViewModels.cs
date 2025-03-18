@@ -1,21 +1,34 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using ollamidesk.Common.MVVM;
+using ollamidesk.Configuration;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
+using ollamidesk.RAG.Diagnostics;
+using ollamidesk.RAG.ViewModels;
 
 namespace ollamidesk.RAG.ViewModels
 {
     public class MainViewModel : ViewModelBase
     {
-        private readonly IOllamaModel _modelService;
+        private IOllamaModel _modelService;
+        private readonly RagDiagnosticsService _diagnostics;
+        private readonly OllamaSettings _ollamaSettings;
         private string _userInput = string.Empty;
         private string _modelName = string.Empty;
         private bool _isBusy;
+
+        // Dictionary to store chat histories for different models
+        private readonly Dictionary<string, ObservableCollection<ChatMessage>> _modelChatHistories =
+            new Dictionary<string, ObservableCollection<ChatMessage>>();
+
+        // Maximum number of messages to keep in history
+        private const int MaxChatHistoryMessages = 50;
 
         public string UserInput
         {
@@ -26,7 +39,14 @@ namespace ollamidesk.RAG.ViewModels
         public string ModelName
         {
             get => _modelName;
-            set => SetProperty(ref _modelName, value);
+            set
+            {
+                if (SetProperty(ref _modelName, value))
+                {
+                    // When model name changes, update chat history
+                    LoadChatHistoryForModel(value);
+                }
+            }
         }
 
         public bool IsBusy
@@ -35,19 +55,129 @@ namespace ollamidesk.RAG.ViewModels
             set => SetProperty(ref _isBusy, value);
         }
 
-        public ObservableCollection<ChatMessage> ChatHistory { get; } = new();
+        public ObservableCollection<ChatMessage> ChatHistory { get; } = new ObservableCollection<ChatMessage>();
         public DocumentViewModel DocumentViewModel { get; }
 
         public ICommand SendMessageCommand { get; }
 
-        public MainViewModel(IOllamaModel modelService, DocumentViewModel documentViewModel)
+        public MainViewModel(IOllamaModel modelService, DocumentViewModel documentViewModel,
+            OllamaSettings ollamaSettings, RagDiagnosticsService diagnostics)
         {
             _modelService = modelService ?? throw new ArgumentNullException(nameof(modelService));
             DocumentViewModel = documentViewModel ?? throw new ArgumentNullException(nameof(documentViewModel));
+            _ollamaSettings = ollamaSettings ?? throw new ArgumentNullException(nameof(ollamaSettings));
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+
+            // Use default model name from settings
+            ModelName = _ollamaSettings.DefaultModel;
 
             SendMessageCommand = new RelayCommand(
                 async _ => await SendMessageAsync(),
                 _ => !string.IsNullOrWhiteSpace(UserInput) && !IsBusy);
+
+            // Initialize the chat history for the default model
+            if (!string.IsNullOrEmpty(ModelName) && !_modelChatHistories.ContainsKey(ModelName))
+            {
+                _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>();
+            }
+
+            _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel", "ViewModel initialized");
+        }
+
+        /// <summary>
+        /// Updates the model service and refreshes the UI accordingly
+        /// </summary>
+        public void UpdateModelService(IOllamaModel newModelService, string modelName)
+        {
+            if (newModelService == null)
+                throw new ArgumentNullException(nameof(newModelService));
+
+            // Save current chat history before switching
+            if (!string.IsNullOrEmpty(ModelName))
+            {
+                SaveChatHistoryForModel(ModelName);
+            }
+
+            _modelService = newModelService;
+            ModelName = modelName; // This will trigger LoadChatHistoryForModel via property setter
+
+            _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel",
+                $"Model service updated to {modelName}");
+        }
+
+        /// <summary>
+        /// Saves the current chat history for a specific model
+        /// </summary>
+        public void SaveChatHistoryForModel(string modelName)
+        {
+            if (string.IsNullOrEmpty(modelName))
+                return;
+
+            // Create a new collection with the current chat history
+            _modelChatHistories[modelName] = new ObservableCollection<ChatMessage>(ChatHistory);
+
+            _diagnostics.Log(DiagnosticLevel.Debug, "MainViewModel",
+                $"Saved chat history for model {modelName} ({ChatHistory.Count} messages)");
+        }
+
+        /// <summary>
+        /// Loads chat history for a specific model
+        /// </summary>
+        public void LoadChatHistoryForModel(string modelName)
+        {
+            if (string.IsNullOrEmpty(modelName))
+                return;
+
+            // Initialize history for this model if it doesn't exist
+            if (!_modelChatHistories.ContainsKey(modelName))
+            {
+                _modelChatHistories[modelName] = new ObservableCollection<ChatMessage>();
+                _diagnostics.Log(DiagnosticLevel.Debug, "MainViewModel",
+                    $"Created new chat history for model {modelName}");
+            }
+
+            // Apply updates on the UI thread
+            CollectionHelper.ClearSafely(ChatHistory);
+
+            foreach (var message in _modelChatHistories[modelName])
+            {
+                CollectionHelper.AddSafely(ChatHistory, message);
+            }
+
+            _diagnostics.Log(DiagnosticLevel.Debug, "MainViewModel",
+                $"Loaded chat history for model {modelName} ({_modelChatHistories[modelName].Count} messages)");
+        }
+
+        /// <summary>
+        /// Adds a new chat message to the current chat history
+        /// </summary>
+        public void AddChatMessage(ChatMessage message)
+        {
+            if (message == null)
+                throw new ArgumentNullException(nameof(message));
+
+            // Manage maximum history size
+            if (ChatHistory.Count >= MaxChatHistoryMessages)
+            {
+                CollectionHelper.RemoveAtSafely(ChatHistory, 0);
+            }
+
+            CollectionHelper.AddSafely(ChatHistory, message);
+
+            // Update the model-specific history in our dictionary
+            if (!string.IsNullOrEmpty(ModelName))
+            {
+                if (!_modelChatHistories.ContainsKey(ModelName))
+                {
+                    _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>();
+                }
+
+                // Make a copy of the current UI-bound collection
+                _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>(ChatHistory);
+            }
+
+            _diagnostics.Log(DiagnosticLevel.Debug, "MainViewModel",
+                "Added new chat message to history");
         }
 
         public async Task SendMessageAsync()
@@ -61,50 +191,93 @@ namespace ollamidesk.RAG.ViewModels
             try
             {
                 IsBusy = true;
+                _diagnostics.StartOperation("SendMessage");
+                _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel",
+                    $"Processing message: \"{userQuery.Substring(0, Math.Min(50, userQuery.Length))}\"");
 
-                // Get any documents to augment with
-                var (augmentedPrompt, sources) = await DocumentViewModel.GenerateAugmentedPromptAsync(userQuery);
+                // Get RAG context if enabled
+                List<DocumentChunk> sources = new List<DocumentChunk>();
+                string prompt = userQuery;
+                bool usedRag = false;
+
+                if (DocumentViewModel.IsRagEnabled)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel", "Using RAG for this message");
+                    var (augmentedPrompt, retrievedSources) = await DocumentViewModel.GenerateAugmentedPromptAsync(userQuery);
+                    prompt = augmentedPrompt;
+                    sources = retrievedSources.ToList();
+                    usedRag = sources.Count > 0;
+                }
 
                 // Get chat history for context
-                var historyContext = ChatHistory
+                List<string> historyContext = ChatHistory
                     .Take(10) // Limit to last 10 messages for context
                     .Select(m => $"User: {m.UserQuery}\nAssistant: {m.ModelResponse}")
                     .ToList();
 
-                // Generate response
-                string response = await _modelService.GenerateResponseAsync(
-                    augmentedPrompt,
-                    string.Empty, // No loaded document, using RAG instead
-                    historyContext
-                );
+                // Generate model response
+                string modelResponse;
+
+                if (usedRag && sources.Count > 0)
+                {
+                    modelResponse = await _modelService.GenerateResponseWithContextAsync(
+                        userQuery,
+                        historyContext,
+                        sources
+                    );
+                }
+                else
+                {
+                    modelResponse = await _modelService.GenerateResponseAsync(
+                        prompt,
+                        string.Empty, // No loaded document, using RAG instead
+                        historyContext
+                    );
+                }
 
                 // Create chat message
                 var message = new ChatMessage
                 {
                     UserQuery = userQuery,
-                    ModelResponse = response,
-                    UsedRag = DocumentViewModel.IsRagEnabled && sources.Count > 0,
+                    ModelResponse = modelResponse,
+                    UsedRag = usedRag,
                     SourceChunkIds = sources.Select(s => s.Id).ToList()
                 };
 
-                // Add to history
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    if (ChatHistory.Count >= 50)
-                    {
-                        ChatHistory.RemoveAt(0);
-                    }
-                    ChatHistory.Add(message);
-                });
+                // Add message to chat history
+                AddChatMessage(message);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                _diagnostics.Log(DiagnosticLevel.Error, "MainViewModel",
+                    $"Error sending message: {ex.Message}");
+
+                Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                });
             }
             finally
             {
                 IsBusy = false;
+                _diagnostics.EndOperation("SendMessage");
             }
+        }
+
+        /// <summary>
+        /// Clears the chat history for all models to free up memory
+        /// </summary>
+        public void ClearAllChatHistory()
+        {
+            CollectionHelper.ClearSafely(ChatHistory);
+            _modelChatHistories.Clear();
+
+            if (!string.IsNullOrEmpty(ModelName))
+            {
+                _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>();
+            }
+
+            _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel", "Cleared all chat history");
         }
     }
 }

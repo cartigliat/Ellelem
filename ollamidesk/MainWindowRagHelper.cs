@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using ollamidesk.Common.MVVM;
 using ollamidesk.RAG.Diagnostics;
+using ollamidesk.Transition;
 
 namespace ollamidesk
 {
@@ -13,21 +14,22 @@ namespace ollamidesk
     public class MainWindowRagHelper
     {
         private readonly MainWindow _mainWindow;
+        private readonly RagDiagnosticsService _diagnostics;
         private RagDiagnosticWindow? _diagnosticWindow;
         private MenuItem? _ragDiagnosticsMenuItem;
 
-        public MainWindowRagHelper(MainWindow mainWindow)
+        public MainWindowRagHelper(MainWindow mainWindow, RagDiagnosticsService diagnostics)
         {
             _mainWindow = mainWindow ?? throw new ArgumentNullException(nameof(mainWindow));
-
-            // Initialize diagnostics system
-            RagDiagnostics.Instance.Enable(DiagnosticLevel.Info);
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
             // Create UI integration
             AddDiagnosticsMenu();
 
             // Add keyboard shortcut
             _mainWindow.KeyDown += MainWindow_KeyDown;
+
+            _diagnostics.Log(DiagnosticLevel.Info, "MainWindowRagHelper", "Initialized RAG helper");
         }
 
         private void AddDiagnosticsMenu()
@@ -74,7 +76,7 @@ namespace ollamidesk
             catch (Exception ex)
             {
                 // If we can't modify the UI, log the error but don't crash
-                RagDiagnostics.Instance.Log(DiagnosticLevel.Error, "MainWindowRagHelper",
+                _diagnostics.Log(DiagnosticLevel.Error, "MainWindowRagHelper",
                     $"Error adding diagnostics menu: {ex.Message}");
             }
         }
@@ -99,7 +101,7 @@ namespace ollamidesk
             catch (Exception ex)
             {
                 // If we can't modify the UI, log the error but don't crash
-                RagDiagnostics.Instance.Log(DiagnosticLevel.Error, "MainWindowRagHelper",
+                _diagnostics.Log(DiagnosticLevel.Error, "MainWindowRagHelper",
                     $"Error adding diagnostics button: {ex.Message}");
             }
         }
@@ -118,9 +120,11 @@ namespace ollamidesk
         {
             if (_diagnosticWindow == null || !_diagnosticWindow.IsVisible)
             {
-                _diagnosticWindow = new RagDiagnosticWindow();
+                _diagnosticWindow = new RagDiagnosticWindow(_diagnostics);
                 _diagnosticWindow.Owner = _mainWindow;
                 _diagnosticWindow.Show();
+
+                _diagnostics.Log(DiagnosticLevel.Info, "MainWindowRagHelper", "Opened diagnostics window");
             }
             else
             {
@@ -136,8 +140,7 @@ namespace ollamidesk
             // Close diagnostic window if open
             _diagnosticWindow?.Close();
 
-            // Disable diagnostics
-            RagDiagnostics.Instance.Disable();
+            _diagnostics.Log(DiagnosticLevel.Info, "MainWindowRagHelper", "Cleaned up resources");
         }
     }
 
@@ -146,9 +149,17 @@ namespace ollamidesk
     /// </summary>
     public static class MainWindowExtensions
     {
+        // Legacy method for backward compatibility
         public static MainWindowRagHelper EnableRagDiagnostics(this MainWindow mainWindow)
         {
-            return new MainWindowRagHelper(mainWindow);
+            var diagnostics = LegacySupport.CreateDiagnosticsService();
+            return new MainWindowRagHelper(mainWindow, diagnostics);
+        }
+
+        // New method with DI
+        public static MainWindowRagHelper EnableRagDiagnostics(this MainWindow mainWindow, RagDiagnosticsService diagnostics)
+        {
+            return new MainWindowRagHelper(mainWindow, diagnostics);
         }
     }
 }

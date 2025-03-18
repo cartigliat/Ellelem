@@ -1,7 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -13,17 +10,18 @@ using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
 using ollamidesk.RAG.ViewModels;
 using ollamidesk.RAG.Diagnostics;
+using ollamidesk.Common.MVVM;
+using ollamidesk.Transition;
 
 namespace ollamidesk
 {
     public partial class MainWindow : Window
     {
         private MainViewModel _viewModel = null!; // Use null! to suppress warning, will be initialized in InitializeServices
-        private Dictionary<string, ObservableCollection<ChatMessage>> chatHistories =
-            new Dictionary<string, ObservableCollection<ChatMessage>>();
-        private string? loadedDocument;
-        private IOllamaModel? selectedModel;
+        private string? _loadedDocument;
+        private IOllamaModel? _selectedModel;
         private MainWindowRagHelper _ragHelper = null!; // Will be initialized in constructor
+        private RagDiagnosticsService _diagnostics = null!; // Will be initialized in InitializeServices
 
         public MainWindow()
         {
@@ -39,34 +37,42 @@ namespace ollamidesk
 
         private void InitializeServices()
         {
-            // Create repositories and services
-            var documentRepository = new FileSystemDocumentRepository();
-            var embeddingService = new OllamaEmbeddingService("nomic-embed-text");
-            var vectorStore = new InMemoryVectorStore();
+            // Create diagnostics service
+            _diagnostics = LegacySupport.CreateDiagnosticsService();
+
+            // Create repositories and services with settings
+            var storageSettings = LegacySupport.CreateStorageSettings();
+            var ollamaSettings = LegacySupport.CreateOllamaSettings();
+            var ragSettings = LegacySupport.CreateRagSettings(
+                chunkSize: 500,
+                chunkOverlap: 100,
+                maxRetrievedChunks: 5,
+                minSimilarityScore: 0.1f);
+
+            var documentRepository = new FileSystemDocumentRepository(storageSettings, _diagnostics);
+            var embeddingService = new OllamaEmbeddingService(ollamaSettings, _diagnostics);
+            var vectorStore = new FileSystemVectorStore(storageSettings, _diagnostics);
 
             // Create RAG service
             var ragService = new RagService(
                 documentRepository,
                 embeddingService,
                 vectorStore,
-                chunkSize: 500,
-                chunkOverlap: 100,
-                maxRetrievedChunks: 5
+                ragSettings,
+                _diagnostics
             );
 
             // Create document view model
-            var documentViewModel = new DocumentViewModel(ragService);
+            var documentViewModel = new DocumentViewModel(ragService, _diagnostics);
 
             // Create main view model
             var initialModel = OllamaModelLoader.LoadModel("llama2"); // Default model
-            _viewModel = new MainViewModel(initialModel, documentViewModel)
+            _viewModel = new MainViewModel(initialModel, documentViewModel,
+                ollamaSettings, _diagnostics)
             {
                 ModelName = "llama2" // Default model name
             };
-            selectedModel = initialModel;
-
-            // Initialize chat history for default model
-            chatHistories["llama2"] = new ObservableCollection<ChatMessage>();
+            _selectedModel = initialModel;
 
             // Set data context
             DataContext = _viewModel;
@@ -75,12 +81,13 @@ namespace ollamidesk
             ChatHistoryItemsControl.ItemsSource = _viewModel.ChatHistory;
 
             // Log initialization
-            RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow",
+            _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
                 "Application initialized with RAG services");
         }
 
         private void MenuToggleButton_Click(object sender, RoutedEventArgs e)
         {
+            // Create a side menu window without requiring the model factory
             SideMenuWindow sideMenuWindow = new SideMenuWindow();
 
             if (sideMenuWindow.ShowDialog() == true)
@@ -88,264 +95,37 @@ namespace ollamidesk
                 // Update the selected model in the main window
                 if (!string.IsNullOrEmpty(sideMenuWindow.SelectedModel))
                 {
-                    ModelNameTextBlock.Text = sideMenuWindow.SelectedModel;
-                    _viewModel.ModelName = sideMenuWindow.SelectedModel;
+                    string previousModelName = _viewModel.ModelName;
+                    string newModelName = sideMenuWindow.SelectedModel;
 
-                    // Load the selected model
-                    selectedModel = OllamaModelLoader.LoadModel(sideMenuWindow.SelectedModel);
-                    RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow",
-                        $"Model changed to: {sideMenuWindow.SelectedModel}");
-
-                    // Update the ViewModel's model service
-                    _viewModel = new MainViewModel(selectedModel, _viewModel.DocumentViewModel)
+                    // Only reload the model if it's different from the current one
+                    if (previousModelName != newModelName)
                     {
-                        ModelName = sideMenuWindow.SelectedModel
-                    };
-                    DataContext = _viewModel;
+                        ModelNameTextBlock.Text = newModelName;
 
-                    // Update chat history binding
-                    UpdateChatHistoryBinding(sideMenuWindow.SelectedModel);
+                        // Load the selected model
+                        var selectedModel = OllamaModelLoader.LoadModel(newModelName);
+                        _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
+                            $"Model changed to: {newModelName}");
+
+                        // Update the ViewModel with the new model
+                        _viewModel.UpdateModelService(selectedModel, newModelName);
+                    }
                 }
 
                 // Update the loaded document
                 if (!string.IsNullOrEmpty(sideMenuWindow.LoadedDocument))
                 {
-                    loadedDocument = sideMenuWindow.LoadedDocument;
-                    RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow",
-                        $"Document loaded with length: {loadedDocument.Length} chars");
+                    _loadedDocument = sideMenuWindow.LoadedDocument;
+                    _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
+                        $"Document loaded with length: {sideMenuWindow.LoadedDocument.Length} chars");
                 }
             }
-        }
-
-        private async void SendMessage()
-        {
-            if (selectedModel == null)
-            {
-                MessageBox.Show("Please select a model first.", "No Model Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            string userInput = string.Empty;
-            await Dispatcher.InvokeAsync(() =>
-            {
-                userInput = UserInputTextBox.Text.Trim();
-            });
-
-            if (string.IsNullOrEmpty(userInput))
-            {
-                return;
-            }
-
-            string selectedModelName = string.Empty;
-            await Dispatcher.InvokeAsync(() =>
-            {
-                selectedModelName = ModelNameTextBlock.Text;
-
-                // Disable input and show loading indicator
-                UserInputTextBox.IsEnabled = false;
-                LoadingIndicator.Visibility = Visibility.Visible;
-
-                // IMPORTANT: Clear the input box right away for better UX
-                UserInputTextBox.Clear();
-            });
-
-            try
-            {
-                RagDiagnostics.Instance.StartOperation("ProcessUserMessage");
-                RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow",
-                    $"Processing user message: \"{userInput.Substring(0, Math.Min(50, userInput.Length))}\"");
-
-                // Get RAG context if enabled
-                string prompt = userInput;
-                List<DocumentChunk> sources = new List<DocumentChunk>();
-                bool usedRag = false;
-
-                if (_viewModel.DocumentViewModel.IsRagEnabled)
-                {
-                    var selectedDocIds = _viewModel.DocumentViewModel.Documents
-                        .Where(d => d.IsSelected && d.IsProcessed)
-                        .Select(d => d.Id)
-                        .ToList();
-
-                    RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow",
-                        $"RAG enabled with {selectedDocIds.Count} selected documents");
-
-                    if (selectedDocIds.Count > 0)
-                    {
-                        RagDiagnostics.Instance.StartOperation("GenerateAugmentedPrompt");
-                        var ragService = (_viewModel.DocumentViewModel as DocumentViewModel).GetRagService();
-                        var (augmentedPrompt, retrievedChunks) = await ragService.GenerateAugmentedPromptAsync(
-                            userInput, selectedDocIds);
-                        RagDiagnostics.Instance.EndOperation("GenerateAugmentedPrompt");
-
-                        prompt = augmentedPrompt;
-                        sources = retrievedChunks;
-                        usedRag = true;
-
-                        RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow",
-                            $"Generated augmented prompt with {retrievedChunks.Count} chunks");
-                    }
-                }
-
-                // Initialize chat history for this model if not exists
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (!chatHistories.ContainsKey(selectedModelName))
-                    {
-                        chatHistories[selectedModelName] = new ObservableCollection<ChatMessage>();
-                    }
-
-                    // CRITICAL FIX: Make sure ChatHistoryItemsControl is using the right collection
-                    ChatHistoryItemsControl.ItemsSource = _viewModel.ChatHistory;
-                });
-
-                // Get current chat history for context
-                var currentChatHistory = await Dispatcher.InvokeAsync(() =>
-                {
-                    return chatHistories[selectedModelName]
-                        .Select(cm => $"User: {cm.UserQuery}\nModel: {cm.ModelResponse}")
-                        .ToList();
-                });
-
-                // Generate model response
-                RagDiagnostics.Instance.StartOperation("GenerateModelResponse");
-                string modelResponse;
-                if (usedRag && sources != null && sources.Count > 0)
-                {
-                    RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow",
-                        "Generating response with RAG context");
-                    modelResponse = await selectedModel.GenerateResponseWithContextAsync(
-                        userInput,
-                        currentChatHistory,
-                        sources
-                    );
-                }
-                else
-                {
-                    RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow",
-                        "Generating response without RAG context");
-                    modelResponse = await selectedModel.GenerateResponseAsync(
-                        userInput,
-                        loadedDocument ?? string.Empty,
-                        currentChatHistory
-                    );
-                }
-                RagDiagnostics.Instance.EndOperation("GenerateModelResponse");
-
-                // Create and add chat message
-                var chatMessage = new ChatMessage
-                {
-                    UserQuery = userInput,
-                    ModelResponse = modelResponse,
-                    UsedRag = usedRag,
-                    SourceChunkIds = sources?.Select(s => s.Id).ToList() ?? new List<string>()
-                };
-
-                // Add to ViewModel
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (_viewModel.ChatHistory.Count >= 50)
-                    {
-                        _viewModel.ChatHistory.RemoveAt(0);
-                    }
-                    _viewModel.ChatHistory.Add(chatMessage);
-
-                    // Update ChatHistoryItemsControl if needed
-                    if (ChatHistoryItemsControl.ItemsSource != _viewModel.ChatHistory)
-                    {
-                        ChatHistoryItemsControl.ItemsSource = _viewModel.ChatHistory;
-                    }
-                });
-
-                // Add the chat message to the appropriate model's chat history
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    // Manage chat history size (keep last 50 messages)
-                    var history = chatHistories[selectedModelName];
-                    if (history.Count >= 50)
-                    {
-                        history.RemoveAt(0);
-                    }
-                    history.Add(chatMessage);
-
-                    // Scroll to bottom
-                    ChatHistoryScrollViewer.ScrollToBottom();
-                });
-            }
-            catch (Exception ex)
-            {
-                RagDiagnostics.Instance.Log(DiagnosticLevel.Error, "MainWindow",
-                    $"Error processing message: {ex.Message}");
-
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    MessageBox.Show($"An error occurred: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                });
-            }
-            finally
-            {
-                RagDiagnostics.Instance.EndOperation("ProcessUserMessage");
-
-                // Re-enable input and hide loading indicator
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    UserInputTextBox.IsEnabled = true;
-                    LoadingIndicator.Visibility = Visibility.Collapsed;
-                    UserInputTextBox.Focus();
-                });
-            }
-        }
-
-        private void UpdateChatHistoryBinding(string modelName)
-        {
-            if (string.IsNullOrEmpty(modelName))
-                return;
-
-            // Ensure chat history exists for this model
-            if (!chatHistories.ContainsKey(modelName))
-            {
-                chatHistories[modelName] = new ObservableCollection<ChatMessage>();
-            }
-
-            // Update the viewModel's ChatHistory to point to this model's history
-            _viewModel.ChatHistory.Clear();
-            foreach (var message in chatHistories[modelName])
-            {
-                _viewModel.ChatHistory.Add(message);
-            }
-
-            // Make sure the UI is bound to the viewModel's ChatHistory
-            ChatHistoryItemsControl.ItemsSource = _viewModel.ChatHistory;
-        }
-
-        private void DiagnoseUiBindings()
-        {
-            // Log the current state of our collections
-            RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "Diagnostics",
-                $"ViewModel.ChatHistory count: {_viewModel.ChatHistory.Count}");
-
-            foreach (var entry in chatHistories)
-            {
-                RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "Diagnostics",
-                    $"Model '{entry.Key}' chat history count: {entry.Value.Count}");
-            }
-
-            // Check what ChatHistoryItemsControl is bound to
-            RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "Diagnostics",
-                $"ChatHistoryItemsControl.ItemsSource type: {ChatHistoryItemsControl.ItemsSource?.GetType().Name ?? "null"}");
-
-            // Get the actual count of items in the ItemsControl
-            RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "Diagnostics",
-                $"ChatHistoryItemsControl items count: {ChatHistoryItemsControl.Items.Count}");
-
-            // Check the DataContext
-            RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "Diagnostics",
-                $"Window DataContext type: {DataContext?.GetType().Name ?? "null"}");
         }
 
         private async void UserInputTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.Enter)
+            if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
             {
                 e.Handled = true;
 
@@ -354,17 +134,20 @@ namespace ollamidesk
                 {
                     if (_viewModel != null)
                     {
+                        // Use the ViewModel's implementation for message handling
                         await _viewModel.SendMessageAsync();
-                    }
-                    else
-                    {
-                        await Task.Run(SendMessage);
+
+                        // Scroll to bottom after message is sent
+                        ChatHistoryScrollViewer.ScrollToBottom();
                     }
                 }
             }
+            else if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.Shift)
+            {
+                // Allow Shift+Enter for new line
+                // Don't mark as handled so the TextBox processes it normally
+            }
         }
-
-
 
         // Add cleanup for resources when closing
         protected override void OnClosed(EventArgs e)
@@ -375,15 +158,14 @@ namespace ollamidesk
             _ragHelper?.Cleanup();
         }
 
-        // Simple RAG panel visibility handlers
-
+        // RAG panel visibility handlers
         private void RagEnableCheckBox_Checked(object sender, RoutedEventArgs e)
         {
             // Show the RAG panel
             RagPanel.Visibility = Visibility.Visible;
 
             // Log that RAG was enabled
-            RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow", "RAG enabled by user");
+            _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "RAG enabled by user");
         }
 
         private void RagEnableCheckBox_Unchecked(object sender, RoutedEventArgs e)
@@ -392,7 +174,7 @@ namespace ollamidesk
             RagPanel.Visibility = Visibility.Collapsed;
 
             // Log that RAG was disabled
-            RagDiagnostics.Instance.Log(DiagnosticLevel.Info, "MainWindow", "RAG disabled by user");
+            _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "RAG disabled by user");
         }
 
         private void UpdateRagPanelVisibility(bool isVisible)
@@ -401,30 +183,6 @@ namespace ollamidesk
 
             // Simple visibility toggle without animation
             RagPanel.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
-        }
-    }
-
-    // Add the extension method to get RagService from DocumentViewModel
-    public static class ViewModelExtensions
-    {
-        public static RagService GetRagService(this DocumentViewModel viewModel)
-        {
-            // Use reflection to get the private _ragService field
-            var fieldInfo = typeof(DocumentViewModel).GetField("_ragService",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-            if (fieldInfo == null)
-            {
-                throw new InvalidOperationException("Could not find _ragService field in DocumentViewModel");
-            }
-
-            var service = fieldInfo.GetValue(viewModel) as RagService;
-            if (service == null)
-            {
-                throw new InvalidOperationException("Failed to get RagService from DocumentViewModel");
-            }
-
-            return service;
         }
     }
 }

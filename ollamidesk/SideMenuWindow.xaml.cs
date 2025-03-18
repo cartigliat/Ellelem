@@ -5,17 +5,33 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
+using ollamidesk.DependencyInjection;
+using ollamidesk.RAG.Diagnostics;
+using ollamidesk.Transition;
 
 namespace ollamidesk
 {
     public partial class SideMenuWindow : Window
     {
+        private readonly OllamaModelFactory? _modelFactory;
+        private readonly RagDiagnosticsService _diagnostics;
+
         public string? SelectedModel { get; private set; }
         public string? LoadedDocument { get; private set; }
 
+        // Legacy constructor for backward compatibility
         public SideMenuWindow()
+            : this(null)
+        {
+        }
+
+        public SideMenuWindow(OllamaModelFactory? modelFactory)
         {
             InitializeComponent();
+
+            _modelFactory = modelFactory;
+            _diagnostics = LegacySupport.CreateDiagnosticsService();
+
             PopulateModelListAsync();
         }
 
@@ -41,9 +57,14 @@ namespace ollamidesk
                 {
                     ModelListBox.SelectedIndex = 0;
                 }
+
+                _diagnostics.Log(DiagnosticLevel.Info, "SideMenuWindow",
+                    $"Populated model list with {models.Length} models");
             }
             catch (Exception ex)
             {
+                _diagnostics.Log(DiagnosticLevel.Error, "SideMenuWindow",
+                    $"Error loading models: {ex.Message}");
                 MessageBox.Show($"Error loading models: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -72,6 +93,7 @@ namespace ollamidesk
             if (ModelListBox.SelectedItem != null)
             {
                 SelectedModel = ModelListBox.SelectedItem.ToString();
+                _diagnostics.Log(DiagnosticLevel.Debug, "SideMenuWindow", $"Selected model: {SelectedModel}");
             }
         }
 
@@ -89,10 +111,14 @@ namespace ollamidesk
                 {
                     string fileName = openFileDialog.FileName;
                     LoadedDocument = File.ReadAllText(fileName);
+                    _diagnostics.Log(DiagnosticLevel.Info, "SideMenuWindow",
+                        $"Document loaded: {Path.GetFileName(fileName)}");
                     MessageBox.Show($"Document loaded: {Path.GetFileName(fileName)}", "Document Loaded", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 catch (Exception ex)
                 {
+                    _diagnostics.Log(DiagnosticLevel.Error, "SideMenuWindow",
+                        $"Error loading document: {ex.Message}");
                     MessageBox.Show($"Error loading document: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
@@ -101,6 +127,7 @@ namespace ollamidesk
         private void RagButton_Click(object sender, RoutedEventArgs e)
         {
             // Placeholder for future RAG implementation
+            _diagnostics.Log(DiagnosticLevel.Info, "SideMenuWindow", "RAG button clicked");
             MessageBox.Show("RAG functionality not implemented yet.", "Coming Soon", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 

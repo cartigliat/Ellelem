@@ -10,6 +10,7 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
+using ollamidesk.Transition;
 
 namespace ollamidesk.RAG.Diagnostics
 {
@@ -18,16 +19,25 @@ namespace ollamidesk.RAG.Diagnostics
         private readonly DispatcherTimer _logUpdateTimer;
         private readonly DispatcherTimer _perfUpdateTimer;
         private string _lastLogContent = string.Empty;
-        private readonly RagDiagnostics _diagnostics = RagDiagnostics.Instance;
+        private readonly RagDiagnosticsService _diagnostics;
 
         private readonly IEmbeddingService? _embeddingService;
         private readonly IOllamaModel? _ollamaModel;
         private readonly IVectorStore? _vectorStore;
         private readonly RagService? _ragService;
 
+        // Legacy constructor for backward compatibility
         public RagDiagnosticWindow()
+            : this(LegacySupport.CreateDiagnosticsService())
+        {
+        }
+
+        // New constructor with DI
+        public RagDiagnosticWindow(RagDiagnosticsService diagnostics)
         {
             InitializeComponent();
+
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
             // Setup timers for log updates
             _logUpdateTimer = new DispatcherTimer
@@ -48,7 +58,7 @@ namespace ollamidesk.RAG.Diagnostics
                 var mainWindow = System.Windows.Application.Current.MainWindow as MainWindow;
                 if (mainWindow != null)
                 {
-                    // Try to get services using reflection or other means
+                    // Try to access services using reflection or other means
                     _embeddingService = GetEmbeddingServiceFromMainWindow(mainWindow);
                     _ollamaModel = GetModelFromMainWindow(mainWindow);
                     _vectorStore = GetVectorStoreFromMainWindow(mainWindow);
@@ -623,7 +633,9 @@ It should be processed correctly by the chunking algorithm.";
                 }
 
                 // If we couldn't get it through reflection, try to create a new instance
-                return new OllamaEmbeddingService("nomic-embed-text");
+                var ollamaSettings = LegacySupport.CreateOllamaSettings();
+                var diagnostics = LegacySupport.CreateDiagnosticsService();
+                return new OllamaEmbeddingService(ollamaSettings, diagnostics);
             }
             catch (Exception ex)
             {
@@ -637,7 +649,7 @@ It should be processed correctly by the chunking algorithm.";
             try
             {
                 // Try to access the model from the main window
-                var modelField = mainWindow.GetType().GetField("selectedModel",
+                var modelField = mainWindow.GetType().GetField("_selectedModel",
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
                 if (modelField != null)
@@ -646,7 +658,7 @@ It should be processed correctly by the chunking algorithm.";
                 }
 
                 // If we couldn't get it through reflection, try to create a new instance
-                return new OllamaModel("llama2");
+                return OllamaModelLoader.LoadModel("llama2");
             }
             catch (Exception ex)
             {
@@ -685,7 +697,9 @@ It should be processed correctly by the chunking algorithm.";
                 }
 
                 // If we couldn't get it through reflection, try to create a new instance
-                return new InMemoryVectorStore();
+                var storageSettings = LegacySupport.CreateStorageSettings();
+                var diagnostics = LegacySupport.CreateDiagnosticsService();
+                return new FileSystemVectorStore(storageSettings, diagnostics);
             }
             catch (Exception ex)
             {
