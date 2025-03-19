@@ -46,7 +46,7 @@ namespace ollamidesk.DependencyInjection
             services.AddSingleton(configProvider);
 
             // Register services
-            RegisterServices(services);
+            RegisterServices(services, appSettings);
 
             // Build the service provider
             _serviceProvider = services.BuildServiceProvider();
@@ -64,19 +64,24 @@ namespace ollamidesk.DependencyInjection
         /// Registers services with the service collection
         /// </summary>
         /// <param name="services">The service collection</param>
-        private static void RegisterServices(IServiceCollection services)
+        /// <param name="appSettings">The application settings</param>
+        private static void RegisterServices(IServiceCollection services, AppSettings appSettings)
         {
             // Register utility services
             services.AddTransient<CommandLineService>();
 
+            // Configure HttpClient using our configuration class
+            HttpClientConfiguration.ConfigureHttpClients(services, appSettings);
+
             // Register repositories and services
             services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>();
-            services.AddSingleton<IVectorStore, FileSystemVectorStore>();
+            services.AddSingleton<IVectorStore, SqliteVectorStore>(); // Updated from FileSystemVectorStore
             services.AddSingleton<IEmbeddingService, OllamaEmbeddingService>();
             services.AddSingleton<RagService>();
 
-            // Register model factory
+            // Register model factory and loader
             services.AddSingleton<OllamaModelFactory>();
+            services.AddSingleton<OllamaModelLoader>();
 
             // Register default model
             services.AddTransient(sp =>
@@ -94,6 +99,7 @@ namespace ollamidesk.DependencyInjection
             services.AddTransient<MainWindow>();
             services.AddTransient<SideMenuWindow>();
             services.AddTransient<RagDiagnosticWindow>();
+            services.AddTransient<MainWindowRagHelper>();
 
             // Register diagnostics
             services.AddSingleton<RagDiagnosticsService>();

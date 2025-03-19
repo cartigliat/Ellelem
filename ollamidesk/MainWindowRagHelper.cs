@@ -2,9 +2,8 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using ollamidesk.Common.MVVM;
+using ollamidesk.DependencyInjection;
 using ollamidesk.RAG.Diagnostics;
-using ollamidesk.Transition;
 
 namespace ollamidesk
 {
@@ -120,7 +119,8 @@ namespace ollamidesk
         {
             if (_diagnosticWindow == null || !_diagnosticWindow.IsVisible)
             {
-                _diagnosticWindow = new RagDiagnosticWindow(_diagnostics);
+                // Get the diagnostic window from DI
+                _diagnosticWindow = ServiceProviderFactory.GetService<RagDiagnosticWindow>();
                 _diagnosticWindow.Owner = _mainWindow;
                 _diagnosticWindow.Show();
 
@@ -141,25 +141,6 @@ namespace ollamidesk
             _diagnosticWindow?.Close();
 
             _diagnostics.Log(DiagnosticLevel.Info, "MainWindowRagHelper", "Cleaned up resources");
-        }
-    }
-
-    /// <summary>
-    /// Extension to MainWindow to easily add RAG diagnostics
-    /// </summary>
-    public static class MainWindowExtensions
-    {
-        // Legacy method for backward compatibility
-        public static MainWindowRagHelper EnableRagDiagnostics(this MainWindow mainWindow)
-        {
-            var diagnostics = LegacySupport.CreateDiagnosticsService();
-            return new MainWindowRagHelper(mainWindow, diagnostics);
-        }
-
-        // New method with DI
-        public static MainWindowRagHelper EnableRagDiagnostics(this MainWindow mainWindow, RagDiagnosticsService diagnostics)
-        {
-            return new MainWindowRagHelper(mainWindow, diagnostics);
         }
     }
 }

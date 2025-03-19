@@ -1,4 +1,5 @@
 using System;
+using System.Net.Http;
 using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 
@@ -11,16 +12,22 @@ namespace ollamidesk.Services
     {
         private readonly OllamaSettings _settings;
         private readonly RagDiagnosticsService _diagnostics;
+        private readonly IHttpClientFactory _httpClientFactory;
 
         /// <summary>
         /// Initializes a new instance of the OllamaModelFactory class
         /// </summary>
         /// <param name="settings">Ollama API settings</param>
         /// <param name="diagnostics">Diagnostics service</param>
-        public OllamaModelFactory(OllamaSettings settings, RagDiagnosticsService diagnostics)
+        /// <param name="httpClientFactory">HTTP client factory</param>
+        public OllamaModelFactory(
+            OllamaSettings settings,
+            RagDiagnosticsService diagnostics,
+            IHttpClientFactory httpClientFactory)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+            _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
 
             _diagnostics.Log(DiagnosticLevel.Info, "OllamaModelFactory",
                 $"Factory initialized with API URL: {_settings.ApiBaseUrl}");
@@ -41,7 +48,7 @@ namespace ollamidesk.Services
             _diagnostics.Log(DiagnosticLevel.Info, "OllamaModelFactory",
                 $"Creating model instance: {modelName}");
 
-            return new OllamaModel(modelName, _settings, _diagnostics);
+            return new OllamaModel(modelName, _settings, _httpClientFactory, _diagnostics);
         }
 
         /// <summary>

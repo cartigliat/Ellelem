@@ -68,7 +68,7 @@ namespace ollamidesk.RAG.Services
             }
         }
 
-        public async Task<Document> AddDocumentAsync(string filePath)
+        public async Task<Document> AddDocumentAsync(string filePath, bool loadFullContent = false)
         {
             _diagnostics.StartOperation("AddDocument");
 
@@ -81,45 +81,33 @@ namespace ollamidesk.RAG.Services
 
                 _diagnostics.Log(DiagnosticLevel.Info, "RagService", $"Adding document: {filePath}");
 
-                // Try to determine file type and read accordingly
-                string content;
+                // Determine file size
+                var fileInfo = new FileInfo(filePath);
+                long fileSize = fileInfo.Length;
+                string name = Path.GetFileName(filePath);
                 string extension = Path.GetExtension(filePath).ToLowerInvariant();
 
-                switch (extension)
-                {
-                    case ".txt":
-                    case ".md":
-                    case ".cs":
-                    case ".json":
-                    case ".xml":
-                    case ".html":
-                    case ".htm":
-                    case ".css":
-                    case ".js":
-                    case ".ts":
-                    case ".py":
-                    case ".java":
-                    case ".c":
-                    case ".cpp":
-                    case ".h":
-                    case ".hpp":
-                        content = await File.ReadAllTextAsync(filePath);
-                        break;
-                    case ".pdf":
-                        // For PDF, you would need a proper PDF reader
-                        // For now, treat as plain text but log the need for PDF handling
-                        _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
-                            "PDF handling is not implemented, treating as text");
-                        content = await File.ReadAllTextAsync(filePath);
-                        break;
-                    default:
-                        _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
-                            $"Unknown file type: {extension}, treating as text");
-                        content = await File.ReadAllTextAsync(filePath);
-                        break;
-                }
+                // Determine if we should load the full content or just a preview
+                bool isLargeFile = fileSize > 10 * 1024 * 1024; // 10MB threshold
+                bool loadPreviewOnly = isLargeFile && !loadFullContent;
 
-                string name = Path.GetFileName(filePath);
+                // Load content based on file size and settings
+                string content;
+                bool isContentTruncated = false;
+
+                if (loadPreviewOnly)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                        $"Large document detected ({fileSize / (1024.0 * 1024.0):F2} MB), loading preview only");
+                    content = await LoadDocumentPreviewAsync(filePath, extension);
+                    isContentTruncated = true;
+                }
+                else
+                {
+                    _diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                        $"Loading full document content ({fileSize / 1024.0:F2} KB)");
+                    content = await LoadDocumentContentAsync(filePath, extension);
+                }
 
                 var document = new Document
                 {
@@ -127,12 +115,14 @@ namespace ollamidesk.RAG.Services
                     FilePath = filePath,
                     Content = content,
                     IsProcessed = false,
-                    IsSelected = false // Initialize as not selected
+                    IsSelected = false,
+                    FileSize = fileSize,
+                    IsContentTruncated = isContentTruncated
                 };
 
                 await _documentRepository.SaveDocumentAsync(document);
                 _diagnostics.Log(DiagnosticLevel.Info, "RagService",
-                    $"Document added with ID: {document.Id}, size: {content.Length} characters");
+                    $"Document added with ID: {document.Id}, size: {fileSize / 1024.0:F2} KB");
 
                 return document;
             }
@@ -147,6 +137,79 @@ namespace ollamidesk.RAG.Services
             }
         }
 
+        private async Task<string> LoadDocumentPreviewAsync(string filePath, string extension)
+        {
+            // For text-based files, load just a preview
+            if (IsTextFile(extension))
+            {
+                using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+                using (var reader = new StreamReader(stream))
+                {
+                    const int previewSize = 100 * 1024; // 100KB preview
+                    char[] buffer = new char[previewSize];
+                    int read = await reader.ReadBlockAsync(buffer, 0, buffer.Length);
+
+                    // Add a message indicating the content is truncated
+                    string preview = new string(buffer, 0, read);
+                    return preview + "\n\n[... Content truncated (large file) ...]";
+                }
+            }
+
+            // For binary or other files, provide a placeholder
+            return $"[Large {extension} file, size: {new FileInfo(filePath).Length / (1024.0 * 1024.0):F2} MB]";
+        }
+
+        private async Task<string> LoadDocumentContentAsync(string filePath, string extension)
+        {
+            // Load full content based on file type
+            if (IsTextFile(extension))
+            {
+                return await File.ReadAllTextAsync(filePath);
+            }
+            else if (extension == ".pdf")
+            {
+                // For PDF, you would need a proper PDF reader
+                // For now, treat as plain text but log the need for PDF handling
+                _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
+                    "PDF handling is not implemented, treating as text");
+
+                try
+                {
+                    return await File.ReadAllTextAsync(filePath);
+                }
+                catch
+                {
+                    return $"[Binary PDF file, size: {new FileInfo(filePath).Length / 1024.0:F2} KB]";
+                }
+            }
+            else
+            {
+                _diagnostics.Log(DiagnosticLevel.Warning, "RagService",
+                    $"Unknown file type: {extension}, treating as text");
+
+                try
+                {
+                    return await File.ReadAllTextAsync(filePath);
+                }
+                catch
+                {
+                    return $"[Binary file with extension {extension}, size: {new FileInfo(filePath).Length / 1024.0:F2} KB]";
+                }
+            }
+        }
+
+        private bool IsTextFile(string extension)
+        {
+            // List of common text file extensions
+            string[] textExtensions = new[] {
+                ".txt", ".md", ".cs", ".json", ".xml", ".html", ".htm", ".css",
+                ".js", ".ts", ".py", ".java", ".c", ".cpp", ".h", ".hpp",
+                ".sql", ".yaml", ".yml", ".config", ".ini", ".log"
+            };
+
+            return textExtensions.Contains(extension.ToLowerInvariant());
+        }
+
         public async Task<Document> ProcessDocumentAsync(string documentId)
         {
             _diagnostics.StartOperation("ProcessDocument");
@@ -159,6 +222,19 @@ namespace ollamidesk.RAG.Services
                 if (document == null)
                 {
                     throw new ArgumentException($"Document not found: {documentId}");
+                }
+
+                // If content is truncated, load the full content before processing
+                if (document.IsContentTruncated)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Info, "RagService",
+                        $"Document content is truncated, loading full content before processing");
+
+                    document = await _documentRepository.LoadFullContentAsync(document.Id);
+                    if (document.IsContentTruncated)
+                    {
+                        throw new InvalidOperationException("Failed to load full document content for processing");
+                    }
                 }
 
                 // Create chunks

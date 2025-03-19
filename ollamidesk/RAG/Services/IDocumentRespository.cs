@@ -8,6 +8,7 @@ namespace ollamidesk.RAG.Services
     {
         Task<List<Document>> GetAllDocumentsAsync();
         Task<Document> GetDocumentByIdAsync(string id);
+        Task<Document> LoadFullContentAsync(string documentId); // New method for large file handling
         Task SaveDocumentAsync(Document document);
         Task DeleteDocumentAsync(string id);
         Task<DocumentChunk> GetChunkByIdAsync(string chunkId);

@@ -11,7 +11,10 @@ namespace ollamidesk.RAG.Models
         public string Content { get; set; } = string.Empty;
         public DateTime DateAdded { get; set; } = DateTime.Now;
         public bool IsProcessed { get; set; }
-        public bool IsSelected { get; set; } // New property to persist selection state
+        public bool IsSelected { get; set; }
+        public long FileSize { get; set; } // New property for file size
+        public bool IsLargeFile => FileSize > 10 * 1024 * 1024; // 10MB threshold
+        public bool IsContentTruncated { get; set; } // Flag indicating if content is just a preview
         public List<DocumentChunk> Chunks { get; set; } = new List<DocumentChunk>();
     }
 

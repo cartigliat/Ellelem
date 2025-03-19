@@ -14,7 +14,7 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // Initialize dependency injection
+        // Initialize dependency injection with default config file path
         ServiceProviderFactory.Initialize();
 
         // Add global exception handling
@@ -29,14 +29,17 @@ public partial class App : Application
             args.Handled = true;
         };
 
-        // Create main window from the service provider
-        var mainWindow = new MainWindow();
+        // Create and show main window from the service provider
+        var mainWindow = ServiceProviderFactory.GetService<MainWindow>();
         mainWindow.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        // Clean up resources if needed
+        // Clean up resources 
+        var diagnostics = ServiceProviderFactory.GetService<RagDiagnosticsService>();
+        diagnostics.Log(DiagnosticLevel.Info, "Application", "Application shutting down");
+
         base.OnExit(e);
     }
 }

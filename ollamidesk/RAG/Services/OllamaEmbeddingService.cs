@@ -18,20 +18,26 @@ namespace ollamidesk.RAG.Services
         private readonly int _retryDelayMs;
         private readonly RagDiagnosticsService _diagnostics;
 
-        public OllamaEmbeddingService(OllamaSettings settings, RagDiagnosticsService diagnostics)
+        public OllamaEmbeddingService(
+            OllamaSettings settings,
+            IHttpClientFactory httpClientFactory,
+            RagDiagnosticsService diagnostics)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
 
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
+            if (httpClientFactory == null)
+                throw new ArgumentNullException(nameof(httpClientFactory));
+
             _modelName = settings.EmbeddingModel;
             _apiUrl = settings.ApiEmbeddingsEndpoint;
             _maxRetries = settings.MaxRetries;
             _retryDelayMs = settings.RetryDelayMs;
 
-            _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+            // Use the HttpClientFactory to create a client
+            _httpClient = httpClientFactory.CreateClient("OllamaApi");
 
             _diagnostics.Log(DiagnosticLevel.Info, "OllamaEmbeddingService",
                 $"Initialized with model: {_modelName}, API URL: {_apiUrl}");

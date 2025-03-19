@@ -5,80 +5,102 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d"
              d:DesignHeight="450" d:DesignWidth="300">
-    
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        
-        <!-- Header -->
-        <StackPanel Grid.Row="0" Margin="10">
-            <TextBlock Text="Document Library" FontSize="18" FontWeight="Bold"/>
-            <CheckBox Content="Enable RAG" IsChecked="{Binding IsRagEnabled, Mode=TwoWay}" Margin="0,5,0,0"/>
-        </StackPanel>
-        
-        <!-- Document List -->
-        <ListView Grid.Row="1" 
+
+	<Grid>
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto"/>
+			<RowDefinition Height="*"/>
+			<RowDefinition Height="Auto"/>
+		</Grid.RowDefinitions>
+
+		<!-- Header -->
+		<StackPanel Grid.Row="0" Margin="10">
+			<TextBlock Text="Document Library" FontSize="18" FontWeight="Bold"/>
+			<CheckBox Content="Enable RAG" IsChecked="{Binding IsRagEnabled, Mode=TwoWay}" Margin="0,5,0,0"/>
+		</StackPanel>
+
+		<!-- Document List -->
+		<ListView Grid.Row="1"
                   ItemsSource="{Binding Documents}"
                   Margin="10">
-            <ListView.ItemTemplate>
-                <DataTemplate>
-                    <Grid Margin="0,5">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        
-                        <!-- Selection Checkbox -->
-                        <CheckBox Grid.Column="0" 
+			<ListView.ItemTemplate>
+				<DataTemplate>
+					<Grid Margin="0,5">
+						<Grid.RowDefinitions>
+							<RowDefinition Height="Auto"/>
+							<RowDefinition Height="Auto"/>
+						</Grid.RowDefinitions>
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="Auto"/>
+							<ColumnDefinition Width="*"/>
+							<ColumnDefinition Width="Auto"/>
+						</Grid.ColumnDefinitions>
+
+						<!-- Selection Checkbox -->
+						<CheckBox Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
                                   IsChecked="{Binding IsSelected, Mode=TwoWay}"
                                   IsEnabled="{Binding IsProcessed}"
                                   VerticalAlignment="Center"/>
-                        
-                        <!-- Document Info -->
-                        <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
-                            <TextBlock Text="{Binding Status}" Foreground="{Binding IsProcessed, Converter={StaticResource StatusColorConverter}}"/>
-                        </StackPanel>
-                        
-                        <!-- Actions -->
-                        <StackPanel Grid.Column="2" Orientation="Horizontal">
-                            <Button Content="Process" 
+
+						<!-- Document Info -->
+						<StackPanel Grid.Column="1" Grid.Row="0" Margin="10,0,0,0">
+							<TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+							<TextBlock Text="{Binding Status}" Foreground="{Binding IsProcessed, Converter={StaticResource StatusColorConverter}}"/>
+						</StackPanel>
+
+						<!-- File Size and Large File Indicator -->
+						<StackPanel Grid.Column="1" Grid.Row="1" Margin="10,3,0,0" Orientation="Horizontal">
+							<TextBlock Text="{Binding FileSizeDisplay}" FontSize="10" Foreground="Gray"/>
+							<TextBlock Text=" | " FontSize="10" Foreground="Gray"
+                                       Visibility="{Binding IsLargeFile, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+							<TextBlock Text="Large File" FontSize="10" Foreground="Orange" FontStyle="Italic"
+                                       Visibility="{Binding IsLargeFile, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+							<TextBlock Text=" | " FontSize="10" Foreground="Gray"
+                                       Visibility="{Binding IsContentTruncated, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+							<TextBlock Text="Preview Only" FontSize="10" Foreground="Gray" FontStyle="Italic"
+                                       Visibility="{Binding IsContentTruncated, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+						</StackPanel>
+
+						<!-- Actions -->
+						<StackPanel Grid.Column="2" Grid.Row="0" Grid.RowSpan="2" Orientation="Vertical">
+							<Button Content="Load Full"
+                                    Command="{Binding LoadFullContentCommand}"
+                                    Visibility="{Binding IsContentTruncated, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                    Margin="0,0,0,3"
+                                    Padding="5,2"/>
+							<Button Content="Process"
                                     Command="{Binding ProcessCommand}"
                                     Visibility="{Binding IsProcessed, Converter={StaticResource NotProcessedToVisibilityConverter}}"
-                                    Margin="0,0,5,0"
+                                    Margin="0,0,0,3"
                                     Padding="5,2"/>
-                            <Button Content="Delete" 
+							<Button Content="Delete"
                                     Command="{Binding DeleteCommand}"
                                     Padding="5,2"/>
-                        </StackPanel>
-                    </Grid>
-                </DataTemplate>
-            </ListView.ItemTemplate>
-        </ListView>
-        
-        <!-- Footer Buttons -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10">
-            <Button Content="Add Document" 
+						</StackPanel>
+					</Grid>
+				</DataTemplate>
+			</ListView.ItemTemplate>
+		</ListView>
+
+		<!-- Footer Buttons -->
+		<StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10">
+			<Button Content="Add Document"
                     Command="{Binding AddDocumentCommand}"
                     Padding="10,5"/>
-            <Button Content="Refresh" 
+			<Button Content="Refresh"
                     Command="{Binding RefreshCommand}"
                     Margin="10,0,0,0"
                     Padding="10,5"/>
-        </StackPanel>
-        
-        <!-- Busy Indicator -->
-        <Border Grid.RowSpan="3" 
-                Background="#80000000" 
+		</StackPanel>
+
+		<!-- Busy Indicator -->
+		<Border Grid.RowSpan="3"
+                Background="#80000000"
                 Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}">
-            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                <TextBlock Text="Working..." Foreground="White" FontSize="16" Margin="0,0,0,10"/>
-                <ProgressBar IsIndeterminate="True" Width="200" Height="10"/>
-            </StackPanel>
-        </Border>
-    </Grid>
+			<StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+				<TextBlock Text="Working..." Foreground="White" FontSize="16" Margin="0,0,0,10"/>
+				<ProgressBar IsIndeterminate="True" Width="200" Height="10"/>
+			</StackPanel>
+		</Border>
+	</Grid>
 </UserControl>

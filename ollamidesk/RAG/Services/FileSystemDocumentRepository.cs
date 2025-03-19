@@ -56,6 +56,12 @@ namespace ollamidesk.RAG.Services
                     {
                         foreach (var doc in documents)
                         {
+                            // For large files, don't load content in metadata
+                            if (doc.IsLargeFile)
+                            {
+                                doc.Content = $"[Large file: {doc.FileSize / (1024.0 * 1024.0):F2} MB - Use LoadFullContentAsync to view]";
+                                doc.IsContentTruncated = true;
+                            }
                             _documentsCache[doc.Id] = doc;
                         }
                     }
@@ -78,7 +84,32 @@ namespace ollamidesk.RAG.Services
         {
             try
             {
-                string json = JsonSerializer.Serialize(_documentsCache.Values.ToList());
+                // Clone documents for serialization, removing content for large files
+                var documentsToSave = _documentsCache.Values.Select(doc =>
+                {
+                    // Create a shallow copy
+                    var docCopy = new Document
+                    {
+                        Id = doc.Id,
+                        Name = doc.Name,
+                        FilePath = doc.FilePath,
+                        DateAdded = doc.DateAdded,
+                        IsProcessed = doc.IsProcessed,
+                        IsSelected = doc.IsSelected,
+                        FileSize = doc.FileSize,
+                        IsContentTruncated = doc.IsLargeFile // Always mark large files as truncated in metadata
+                    };
+
+                    // Only include content for small files
+                    if (!doc.IsLargeFile)
+                    {
+                        docCopy.Content = doc.Content;
+                    }
+
+                    return docCopy;
+                }).ToList();
+
+                string json = JsonSerializer.Serialize(documentsToSave);
                 await File.WriteAllTextAsync(_metadataFile, json);
 
                 _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
@@ -111,13 +142,77 @@ namespace ollamidesk.RAG.Services
             throw new KeyNotFoundException($"Document with ID {id} not found");
         }
 
+        public async Task<Document> LoadFullContentAsync(string documentId)
+        {
+            await EnsureInitializedAsync();
+
+            if (!_documentsCache.TryGetValue(documentId, out var document))
+            {
+                throw new KeyNotFoundException($"Document with ID {documentId} not found");
+            }
+
+            // If it's not a large file or content is already loaded, return as is
+            if (!document.IsLargeFile || !document.IsContentTruncated)
+            {
+                return document;
+            }
+
+            try
+            {
+                _diagnostics.StartOperation("LoadFullDocumentContent");
+
+                if (!File.Exists(document.FilePath))
+                {
+                    _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
+                        $"Document file not found: {document.FilePath}");
+                    throw new FileNotFoundException($"Document file not found: {document.FilePath}");
+                }
+
+                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
+                    $"Loading full content for large document: {document.Id}, size: {document.FileSize / (1024.0 * 1024.0):F2} MB");
+
+                // For text files, read the actual content
+                if (IsTextFile(Path.GetExtension(document.FilePath)))
+                {
+                    document.Content = await File.ReadAllTextAsync(document.FilePath);
+                    document.IsContentTruncated = false;
+
+                    _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
+                        $"Loaded full content, length: {document.Content.Length} characters");
+                }
+                else
+                {
+                    _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
+                        $"Cannot load full content for non-text file: {document.FilePath}");
+                }
+
+                return document;
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
+                    $"Error loading full document content: {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                _diagnostics.EndOperation("LoadFullDocumentContent");
+            }
+        }
+
         public async Task SaveDocumentAsync(Document document)
         {
             await EnsureInitializedAsync();
 
-            // Save document content
-            string documentPath = Path.Combine(_documentsFolder, $"{document.Id}.txt");
-            await File.WriteAllTextAsync(documentPath, document.Content);
+            // For large files, only save content to disk if it's not truncated
+            if (!document.IsContentTruncated && !string.IsNullOrEmpty(document.Content))
+            {
+                string documentPath = Path.Combine(_documentsFolder, $"{document.Id}.txt");
+                await File.WriteAllTextAsync(documentPath, document.Content);
+
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
+                    $"Saved document content to disk: {document.Id}, size: {document.Content.Length} chars");
+            }
 
             // Save embeddings if processed
             if (document.IsProcessed && document.Chunks.Count > 0)
@@ -125,6 +220,9 @@ namespace ollamidesk.RAG.Services
                 string embeddingsPath = Path.Combine(_embeddingsFolder, $"{document.Id}.json");
                 string embeddingsJson = JsonSerializer.Serialize(document.Chunks);
                 await File.WriteAllTextAsync(embeddingsPath, embeddingsJson);
+
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
+                    $"Saved {document.Chunks.Count} chunks for document: {document.Id}");
             }
 
             // Update cache
@@ -134,7 +232,7 @@ namespace ollamidesk.RAG.Services
             await SaveMetadataAsync();
 
             _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
-                $"Document saved: {document.Id}, Name: {document.Name}, Size: {document.Content.Length} chars");
+                $"Document saved: {document.Id}, Name: {document.Name}, Size: {document.FileSize / 1024.0:F2} KB");
         }
 
         public async Task DeleteDocumentAsync(string id)
@@ -192,6 +290,18 @@ namespace ollamidesk.RAG.Services
             _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
                 $"Chunk with ID {chunkId} not found");
             throw new KeyNotFoundException($"Chunk with ID {chunkId} not found");
+        }
+
+        private bool IsTextFile(string extension)
+        {
+            // List of common text file extensions
+            string[] textExtensions = new[] {
+                ".txt", ".md", ".cs", ".json", ".xml", ".html", ".htm", ".css",
+                ".js", ".ts", ".py", ".java", ".c", ".cpp", ".h", ".hpp",
+                ".sql", ".yaml", ".yml", ".config", ".ini", ".log"
+            };
+
+            return textExtensions.Contains(extension.ToLowerInvariant());
         }
     }
 }

@@ -1,54 +1,24 @@
 ﻿using Microsoft.Win32;
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
-using ollamidesk.DependencyInjection;
 using ollamidesk.RAG.Diagnostics;
-using ollamidesk.Transition;
 using ollamidesk.Services;
 
 namespace ollamidesk
 {
     public partial class SideMenuWindow : Window
     {
-        private readonly OllamaModelFactory? _modelFactory;
+        private readonly OllamaModelFactory _modelFactory;
         private readonly RagDiagnosticsService _diagnostics;
-        private readonly CommandLineService? _commandLineService;
+        private readonly CommandLineService _commandLineService;
 
         public string? SelectedModel { get; private set; }
         public string? LoadedDocument { get; private set; }
 
-        // Legacy constructor for backward compatibility
-        public SideMenuWindow()
-        {
-            InitializeComponent();
-
-            // Try to get services from DI container if available
-            try
-            {
-                if (ServiceProviderFactory.IsInitialized)
-                {
-                    _modelFactory = ServiceProviderFactory.GetService<OllamaModelFactory>();
-                    _diagnostics = ServiceProviderFactory.GetService<RagDiagnosticsService>();
-                    _commandLineService = ServiceProviderFactory.GetService<CommandLineService>();
-                }
-                else
-                {
-                    _diagnostics = LegacySupport.CreateDiagnosticsService();
-                }
-            }
-            catch
-            {
-                _diagnostics = LegacySupport.CreateDiagnosticsService();
-            }
-
-            PopulateModelListAsync();
-        }
-
-        // New constructor with DI
+        // Constructor with DI
         public SideMenuWindow(
             OllamaModelFactory modelFactory,
             RagDiagnosticsService diagnostics,
@@ -67,25 +37,15 @@ namespace ollamidesk
         {
             try
             {
-                string modelList;
-
-                if (_commandLineService != null)
-                {
-                    // Use the CommandLineService
-                    var result = await _commandLineService.ExecuteCommandAsync("cmd.exe", "/C ollama list");
-                    modelList = result.output;
-                }
-                else
-                {
-                    // Fall back to the utility class
-                    modelList = await ExecuteCommandAsync("ollama list");
-                }
+                // Use the CommandLineService to get the list of models
+                var result = await _commandLineService.ExecuteCommandAsync("cmd.exe", "/C ollama list");
+                string modelList = result.output;
 
                 // Split the output and skip the header line
                 string[] models = modelList.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                                           .Skip(1) // Skip header
-                                           .Select(line => line.Split(new[] { ' ' }, 2)[0]) // Extract model name
-                                           .ToArray();
+                                       .Skip(1) // Skip header
+                                       .Select(line => line.Split(new[] { ' ' }, 2)[0]) // Extract model name
+                                       .ToArray();
 
                 ModelListBox.Items.Clear();
                 foreach (string model in models)
@@ -106,26 +66,6 @@ namespace ollamidesk
                 _diagnostics.Log(DiagnosticLevel.Error, "SideMenuWindow",
                     $"Error loading models: {ex.Message}");
                 MessageBox.Show($"Error loading models: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        // Legacy method for use when CommandLineService is not available
-        private async Task<string> ExecuteCommandAsync(string command)
-        {
-            try
-            {
-                var (output, error) = await CommandLineUtil.ExecuteCommandAsync("cmd.exe", $"/C {command}");
-
-                if (!string.IsNullOrEmpty(error))
-                {
-                    throw new Exception($"Command execution error: {error}");
-                }
-
-                return output;
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"Failed to execute command: {ex.Message}");
             }
         }
 

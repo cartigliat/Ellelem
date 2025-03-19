@@ -21,7 +21,11 @@ namespace ollamidesk
         private readonly string _systemPrompt;
         private readonly RagDiagnosticsService _diagnostics;
 
-        public OllamaModel(string modelName, OllamaSettings settings, RagDiagnosticsService diagnostics)
+        public OllamaModel(
+            string modelName,
+            OllamaSettings settings,
+            IHttpClientFactory httpClientFactory,
+            RagDiagnosticsService diagnostics)
         {
             _modelName = modelName ?? throw new ArgumentNullException(nameof(modelName));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
@@ -29,13 +33,19 @@ namespace ollamidesk
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
 
+            if (httpClientFactory == null)
+                throw new ArgumentNullException(nameof(httpClientFactory));
+
             _apiUrl = settings.ApiGenerateEndpoint;
             _maxRetries = settings.MaxRetries;
             _retryDelayMs = settings.RetryDelayMs;
             _systemPrompt = settings.SystemPrompt;
 
-            _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+            // Use the HttpClientFactory to create a client
+            _httpClient = httpClientFactory.CreateClient("OllamaApi");
+
+            _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
+                $"Model initialized: {modelName} with HttpClientFactory");
         }
 
         public async Task<string> GenerateResponseAsync(string userInput, string loadedDocument, List<string> chatHistory)

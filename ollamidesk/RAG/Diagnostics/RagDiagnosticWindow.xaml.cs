@@ -10,7 +10,7 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
-using ollamidesk.Transition;
+using ollamidesk.RAG.Diagnostics;
 using ollamidesk.DependencyInjection;
 
 namespace ollamidesk.RAG.Diagnostics
@@ -21,45 +21,18 @@ namespace ollamidesk.RAG.Diagnostics
         private DispatcherTimer _perfUpdateTimer;
         private string _lastLogContent = string.Empty;
         private readonly RagDiagnosticsService _diagnostics;
-
-        // Remove readonly modifiers from these fields since they need to be assigned after construction
-        private IEmbeddingService? _embeddingService;
-        private IOllamaModel? _ollamaModel;
-        private IVectorStore? _vectorStore;
-        private RagService? _ragService;
-
-        // Legacy constructor for backward compatibility
-        public RagDiagnosticWindow()
-        {
-            InitializeComponent();
-
-            // Initialize timer fields to avoid nullable warnings
-            _logUpdateTimer = null!;
-            _perfUpdateTimer = null!;
-
-            try
-            {
-                // Try to use DI if available
-                if (ServiceProviderFactory.IsInitialized)
-                {
-                    _diagnostics = ServiceProviderFactory.GetService<RagDiagnosticsService>();
-                }
-                else
-                {
-                    _diagnostics = LegacySupport.CreateDiagnosticsService();
-                }
-            }
-            catch
-            {
-                _diagnostics = LegacySupport.CreateDiagnosticsService();
-            }
-
-            InitializeTimers();
-            GetServiceInstances();
-        }
+        private readonly IEmbeddingService _embeddingService;
+        private readonly IOllamaModel _ollamaModel;
+        private readonly IVectorStore _vectorStore;
+        private readonly RagService _ragService;
 
         // Constructor with DI
-        public RagDiagnosticWindow(RagDiagnosticsService diagnostics)
+        public RagDiagnosticWindow(
+            RagDiagnosticsService diagnostics,
+            IEmbeddingService embeddingService,
+            IOllamaModel ollamaModel,
+            IVectorStore vectorStore,
+            RagService ragService)
         {
             InitializeComponent();
 
@@ -68,9 +41,14 @@ namespace ollamidesk.RAG.Diagnostics
             _perfUpdateTimer = null!;
 
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+            _embeddingService = embeddingService ?? throw new ArgumentNullException(nameof(embeddingService));
+            _ollamaModel = ollamaModel ?? throw new ArgumentNullException(nameof(ollamaModel));
+            _vectorStore = vectorStore ?? throw new ArgumentNullException(nameof(vectorStore));
+            _ragService = ragService ?? throw new ArgumentNullException(nameof(ragService));
 
             InitializeTimers();
-            GetServiceInstances();
+
+            StatusText.Text = "Connected to application services via DI";
         }
 
         private void InitializeTimers()
@@ -87,73 +65,6 @@ namespace ollamidesk.RAG.Diagnostics
                 Interval = TimeSpan.FromSeconds(5)
             };
             _perfUpdateTimer.Tick += PerfUpdateTimer_Tick;
-        }
-
-        private void GetServiceInstances()
-        {
-            try
-            {
-                if (ServiceProviderFactory.IsInitialized)
-                {
-                    // Get services from the DI container
-                    _embeddingService = ServiceProviderFactory.GetService<IEmbeddingService>();
-                    _ollamaModel = ServiceProviderFactory.GetService<IOllamaModel>();
-                    _vectorStore = ServiceProviderFactory.GetService<IVectorStore>();
-                    _ragService = ServiceProviderFactory.GetService<RagService>();
-
-                    if (_embeddingService != null && _ollamaModel != null &&
-                        _vectorStore != null && _ragService != null)
-                    {
-                        StatusText.Text = "Connected to application services via DI";
-                    }
-                    else
-                    {
-                        // Fallback to trying to get services from MainWindow
-                        TryGetServicesFromMainWindow();
-                    }
-                }
-                else
-                {
-                    TryGetServicesFromMainWindow();
-                }
-            }
-            catch (Exception ex)
-            {
-                StatusText.Text = "Error connecting to services: " + ex.Message;
-            }
-        }
-
-        private void TryGetServicesFromMainWindow()
-        {
-            try
-            {
-                var mainWindow = Application.Current.MainWindow as MainWindow;
-                if (mainWindow != null)
-                {
-                    // Try to access services using reflection or other means
-                    _embeddingService = GetEmbeddingServiceFromMainWindow(mainWindow);
-                    _ollamaModel = GetModelFromMainWindow(mainWindow);
-                    _vectorStore = GetVectorStoreFromMainWindow(mainWindow);
-                    _ragService = GetRagServiceFromMainWindow(mainWindow);
-
-                    if (_embeddingService != null && _ollamaModel != null && _vectorStore != null && _ragService != null)
-                    {
-                        StatusText.Text = "Connected to application services";
-                    }
-                    else
-                    {
-                        StatusText.Text = "Could not connect to all application services";
-                    }
-                }
-                else
-                {
-                    StatusText.Text = "Could not find MainWindow";
-                }
-            }
-            catch (Exception ex)
-            {
-                StatusText.Text = "Error connecting to services: " + ex.Message;
-            }
         }
 
         private async void LogUpdateTimer_Tick(object? sender, EventArgs e)
@@ -318,13 +229,6 @@ namespace ollamidesk.RAG.Diagnostics
                 EmbeddingStatusText.Text = "Testing...";
                 TestResultsTextBox.Text = "Testing embedding service...";
 
-                if (_embeddingService == null)
-                {
-                    EmbeddingStatusText.Text = "FAILED: Service not available";
-                    TestResultsTextBox.Text += "\nFAILED: Embedding service not available";
-                    return;
-                }
-
                 var results = new StringBuilder();
                 results.AppendLine("Embedding Service Test Results:");
                 results.AppendLine();
@@ -383,13 +287,6 @@ namespace ollamidesk.RAG.Diagnostics
                 ModelStatusText.Text = "Testing...";
                 TestResultsTextBox.Text = "Testing Ollama model...";
 
-                if (_ollamaModel == null)
-                {
-                    ModelStatusText.Text = "FAILED: Model not available";
-                    TestResultsTextBox.Text += "\nFAILED: Ollama model not available";
-                    return;
-                }
-
                 var results = new StringBuilder();
                 results.AppendLine("Ollama Model Test Results:");
                 results.AppendLine();
@@ -446,13 +343,6 @@ namespace ollamidesk.RAG.Diagnostics
                 TestVectorStoreButton.IsEnabled = false;
                 VectorStoreStatusText.Text = "Testing...";
                 TestResultsTextBox.Text = "Testing vector store...";
-
-                if (_vectorStore == null || _embeddingService == null)
-                {
-                    VectorStoreStatusText.Text = "FAILED: Services not available";
-                    TestResultsTextBox.Text += "\nFAILED: Vector store or embedding service not available";
-                    return;
-                }
 
                 var results = new StringBuilder();
                 results.AppendLine("Vector Store Test Results:");
@@ -558,13 +448,6 @@ namespace ollamidesk.RAG.Diagnostics
                 TestChunkingButton.IsEnabled = false;
                 ChunkingStatusText.Text = "Testing...";
                 TestResultsTextBox.Text = "Testing document chunking...";
-
-                if (_ragService == null)
-                {
-                    ChunkingStatusText.Text = "FAILED: Service not available";
-                    TestResultsTextBox.Text += "\nFAILED: RAG service not available";
-                    return;
-                }
 
                 var results = new StringBuilder();
                 results.AppendLine("Document Chunking Test Results:");
@@ -672,140 +555,5 @@ It should be processed correctly by the chunking algorithm.";
                 TestChunkingButton.IsEnabled = true;
             }
         }
-
-        #region Service Retrieval Methods
-
-        private IEmbeddingService? GetEmbeddingServiceFromMainWindow(MainWindow mainWindow)
-        {
-            try
-            {
-                // Try to access the embedding service from the main window's ViewModels
-                var documentViewModel = mainWindow.DataContext?.GetType()
-                    .GetProperty("DocumentViewModel")?.GetValue(mainWindow.DataContext);
-
-                if (documentViewModel != null)
-                {
-                    // Use reflection to get the private _ragService field
-                    var ragServiceField = documentViewModel.GetType().GetField("_ragService",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-                    if (ragServiceField != null)
-                    {
-                        var ragService = ragServiceField.GetValue(documentViewModel);
-
-                        if (ragService != null)
-                        {
-                            // Get the embedding service from the RagService
-                            var embeddingServiceField = ragService.GetType().GetField("_embeddingService",
-                                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-                            return embeddingServiceField?.GetValue(ragService) as IEmbeddingService;
-                        }
-                    }
-                }
-
-                // If we couldn't get it through reflection, try to create a new instance
-                var ollamaSettings = LegacySupport.CreateOllamaSettings();
-                var diagnostics = LegacySupport.CreateDiagnosticsService();
-                return new OllamaEmbeddingService(ollamaSettings, diagnostics);
-            }
-            catch (Exception ex)
-            {
-                StatusText.Text = "Error getting embedding service: " + ex.Message;
-                return null;
-            }
-        }
-
-        private IOllamaModel? GetModelFromMainWindow(MainWindow mainWindow)
-        {
-            try
-            {
-                // Try to access the model from the main window
-                var modelField = mainWindow.GetType().GetField("_ollamaModel",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-                if (modelField != null)
-                {
-                    return modelField.GetValue(mainWindow) as IOllamaModel;
-                }
-
-                // If we couldn't get it through reflection, try to create a new instance
-                return OllamaModelLoader.LoadModel("llama2");
-            }
-            catch (Exception ex)
-            {
-                StatusText.Text = "Error getting model: " + ex.Message;
-                return null;
-            }
-        }
-
-        private IVectorStore? GetVectorStoreFromMainWindow(MainWindow mainWindow)
-        {
-            try
-            {
-                // Try to access the vector store from the main window's ViewModels
-                var documentViewModel = mainWindow.DataContext?.GetType()
-                    .GetProperty("DocumentViewModel")?.GetValue(mainWindow.DataContext);
-
-                if (documentViewModel != null)
-                {
-                    // Use reflection to get the private _ragService field
-                    var ragServiceField = documentViewModel.GetType().GetField("_ragService",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-                    if (ragServiceField != null)
-                    {
-                        var ragService = ragServiceField.GetValue(documentViewModel);
-
-                        if (ragService != null)
-                        {
-                            // Get the vector store from the RagService
-                            var vectorStoreField = ragService.GetType().GetField("_vectorStore",
-                                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-                            return vectorStoreField?.GetValue(ragService) as IVectorStore;
-                        }
-                    }
-                }
-
-                // If we couldn't get it through reflection, try to create a new instance
-                var storageSettings = LegacySupport.CreateStorageSettings();
-                var diagnostics = LegacySupport.CreateDiagnosticsService();
-                return new FileSystemVectorStore(storageSettings, diagnostics);
-            }
-            catch (Exception ex)
-            {
-                StatusText.Text = "Error getting vector store: " + ex.Message;
-                return null;
-            }
-        }
-
-        private RagService? GetRagServiceFromMainWindow(MainWindow mainWindow)
-        {
-            try
-            {
-                // Try to access the rag service from the main window's ViewModels
-                var documentViewModel = mainWindow.DataContext?.GetType()
-                    .GetProperty("DocumentViewModel")?.GetValue(mainWindow.DataContext);
-
-                if (documentViewModel != null)
-                {
-                    // Use reflection to get the private _ragService field
-                    var ragServiceField = documentViewModel.GetType().GetField("_ragService",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-                    return ragServiceField?.GetValue(documentViewModel) as RagService;
-                }
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                StatusText.Text = "Error getting RAG service: " + ex.Message;
-                return null;
-            }
-        }
-
-        #endregion
     }
 }

@@ -18,6 +18,7 @@ namespace ollamidesk.RAG.ViewModels
     {
         private readonly RagService _ragService;
         private readonly RagDiagnosticsService _diagnostics;
+        private readonly IDocumentRepository _documentRepository;
         private bool _isRagEnabled;
         private bool _isBusy;
 
@@ -38,10 +39,14 @@ namespace ollamidesk.RAG.ViewModels
         public ICommand AddDocumentCommand { get; }
         public ICommand RefreshCommand { get; }
 
-        public DocumentViewModel(RagService ragService, RagDiagnosticsService diagnostics)
+        public DocumentViewModel(
+            RagService ragService,
+            RagDiagnosticsService diagnostics,
+            IDocumentRepository documentRepository)
         {
             _ragService = ragService ?? throw new ArgumentNullException(nameof(ragService));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+            _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
 
             AddDocumentCommand = new RelayCommand(async _ => await AddDocumentAsync());
             RefreshCommand = new RelayCommand(async _ => await LoadDocumentsAsync());
@@ -78,7 +83,8 @@ namespace ollamidesk.RAG.ViewModels
                 foreach (var doc in documents)
                 {
                     // Add documents one by one on UI thread
-                    CollectionHelper.AddSafely(Documents, new DocumentItemViewModel(doc, _ragService, _diagnostics));
+                    CollectionHelper.AddSafely(Documents,
+                        new DocumentItemViewModel(doc, _ragService, _diagnostics, _documentRepository));
                 }
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
@@ -89,7 +95,7 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
                     $"Error loading documents: {ex.Message}");
 
-                Application.Current.Dispatcher.Invoke(() =>
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
                     MessageBox.Show($"Error loading documents: {ex.Message}", "Error",
                         MessageBoxButton.OK, MessageBoxImage.Error);
@@ -106,7 +112,7 @@ namespace ollamidesk.RAG.ViewModels
         {
             var openFileDialog = new OpenFileDialog
             {
-                Filter = "Text files (*.txt)|*.txt|PDF files (*.pdf)|*.pdf|All files (*.*)|*.*",
+                Filter = "Text files (*.txt)|*.txt|PDF files (*.pdf)|*.pdf|Code files (*.cs;*.js;*.py;*.java)|*.cs;*.js;*.py;*.java|All files (*.*)|*.*",
                 Title = "Select document to add"
             };
 
@@ -122,7 +128,8 @@ namespace ollamidesk.RAG.ViewModels
                     var document = await _ragService.AddDocumentAsync(openFileDialog.FileName);
 
                     // Add new document to collection on UI thread
-                    CollectionHelper.AddSafely(Documents, new DocumentItemViewModel(document, _ragService, _diagnostics));
+                    CollectionHelper.AddSafely(Documents,
+                        new DocumentItemViewModel(document, _ragService, _diagnostics, _documentRepository));
 
                     _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
                         $"Document added successfully: {document.Id}");
@@ -132,7 +139,7 @@ namespace ollamidesk.RAG.ViewModels
                     _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
                         $"Error adding document: {ex.Message}");
 
-                    Application.Current.Dispatcher.Invoke(() =>
+                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
                     {
                         MessageBox.Show($"Error adding document: {ex.Message}", "Error",
                             MessageBoxButton.OK, MessageBoxImage.Error);
@@ -183,7 +190,7 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
                     $"Error generating augmented prompt: {ex.Message}");
 
-                Application.Current.Dispatcher.Invoke(() =>
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
                     MessageBox.Show($"Error generating augmented prompt: {ex.Message}", "Error",
                         MessageBoxButton.OK, MessageBoxImage.Error);
@@ -202,13 +209,18 @@ namespace ollamidesk.RAG.ViewModels
     {
         private readonly RagService _ragService;
         private readonly RagDiagnosticsService _diagnostics;
+        private readonly IDocumentRepository _documentRepository;
         private bool _isSelected;
         private bool _isProcessing;
-        private readonly Document _document; // Reference to the actual document
+        private bool _isLoadingFullContent;
+        private Document _document; // Reference to the actual document
 
         public string Id { get; }
         public string Name { get; }
         public bool IsProcessed { get; private set; }
+        public bool IsLargeFile => _document.IsLargeFile;
+        public bool IsContentTruncated => _document.IsContentTruncated;
+        public string FileSizeDisplay => FormatFileSize(_document.FileSize);
 
         public bool IsSelected
         {
@@ -245,15 +257,33 @@ namespace ollamidesk.RAG.ViewModels
             set => SetProperty(ref _isProcessing, value);
         }
 
-        public string Status => IsProcessed ? "Processed" : (IsProcessing ? "Processing..." : "Not Processed");
+        public bool IsLoadingFullContent
+        {
+            get => _isLoadingFullContent;
+            set => SetProperty(ref _isLoadingFullContent, value);
+        }
+
+        public string Status => IsProcessed
+            ? "Processed"
+            : (IsProcessing
+                ? "Processing..."
+                : (IsLargeFile
+                    ? "Large File"
+                    : "Not Processed"));
 
         public ICommand ProcessCommand { get; }
         public ICommand DeleteCommand { get; }
+        public ICommand LoadFullContentCommand { get; }
 
-        public DocumentItemViewModel(Document document, RagService ragService, RagDiagnosticsService diagnostics)
+        public DocumentItemViewModel(
+            Document document,
+            RagService ragService,
+            RagDiagnosticsService diagnostics,
+            IDocumentRepository documentRepository)
         {
             _ragService = ragService ?? throw new ArgumentNullException(nameof(ragService));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+            _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
             _document = document ?? throw new ArgumentNullException(nameof(document));
 
             Id = document.Id;
@@ -267,7 +297,48 @@ namespace ollamidesk.RAG.ViewModels
 
             DeleteCommand = new RelayCommand(
                 async _ => await DeleteDocumentAsync(),
-                _ => !IsProcessing);
+                _ => !IsProcessing && !IsLoadingFullContent);
+
+            LoadFullContentCommand = new RelayCommand(
+                async _ => await LoadFullContentAsync(),
+                _ => IsContentTruncated && !IsLoadingFullContent);
+        }
+
+        private async Task LoadFullContentAsync()
+        {
+            try
+            {
+                IsLoadingFullContent = true;
+
+                _diagnostics.StartOperation("LoadFullDocumentContent");
+                _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
+                    $"Loading full content for document: {Id}");
+
+                // Load full content
+                _document = await _documentRepository.LoadFullContentAsync(Id);
+
+                // Notify UI of changes
+                OnPropertyChanged(nameof(IsContentTruncated));
+
+                _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
+                    $"Full content loaded for document: {Id}, content length: {_document.Content.Length} chars");
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
+                    $"Error loading full content: {ex.Message}");
+
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    MessageBox.Show($"Error loading full document content: {ex.Message}", "Error",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                });
+            }
+            finally
+            {
+                IsLoadingFullContent = false;
+                _diagnostics.EndOperation("LoadFullDocumentContent");
+            }
         }
 
         private async Task ProcessDocumentAsync()
@@ -281,10 +352,24 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                     $"Processing document: {Id}");
 
-                await _ragService.ProcessDocumentAsync(Id);
+                // For large files that still have truncated content, load full content first
+                if (IsLargeFile && IsContentTruncated)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
+                        $"Large file with truncated content detected, loading full content before processing");
+
+                    _document = await _documentRepository.LoadFullContentAsync(Id);
+                    OnPropertyChanged(nameof(IsContentTruncated));
+                }
+
+                // Process the document
+                _document = await _ragService.ProcessDocumentAsync(Id);
 
                 IsProcessed = true;
                 IsSelected = true;
+
+                // Update UI properties
+                OnPropertyChanged(nameof(Status));
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                     $"Document processed successfully: {Id}");
@@ -294,7 +379,7 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
                     $"Error processing document: {ex.Message}");
 
-                Application.Current.Dispatcher.Invoke(() =>
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
                     MessageBox.Show($"Error processing document: {ex.Message}", "Error",
                         MessageBoxButton.OK, MessageBoxImage.Error);
@@ -343,7 +428,7 @@ namespace ollamidesk.RAG.ViewModels
                     _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
                         $"Error deleting document: {ex.Message}");
 
-                    Application.Current.Dispatcher.Invoke(() =>
+                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
                     {
                         MessageBox.Show($"Error deleting document: {ex.Message}", "Error",
                             MessageBoxButton.OK, MessageBoxImage.Error);
@@ -359,7 +444,7 @@ namespace ollamidesk.RAG.ViewModels
         private DocumentViewModel? GetParentViewModel()
         {
             // Try to find parent ViewModel in application windows
-            foreach (Window window in Application.Current.Windows)
+            foreach (Window window in System.Windows.Application.Current.Windows)
             {
                 if (window.DataContext is MainViewModel mainViewModel &&
                     mainViewModel.DocumentViewModel is DocumentViewModel docViewModel)
@@ -368,6 +453,21 @@ namespace ollamidesk.RAG.ViewModels
                 }
             }
             return null;
+        }
+
+        private string FormatFileSize(long bytes)
+        {
+            string[] suffixes = { "B", "KB", "MB", "GB", "TB" };
+            int suffixIndex = 0;
+            double size = bytes;
+
+            while (size >= 1024 && suffixIndex < suffixes.Length - 1)
+            {
+                size /= 1024;
+                suffixIndex++;
+            }
+
+            return $"{size:0.##} {suffixes[suffixIndex]}";
         }
     }
 }
