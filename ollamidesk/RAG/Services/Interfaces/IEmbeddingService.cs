@@ -1,6 +1,6 @@
 using System.Threading.Tasks;
 
-namespace ollamidesk.RAG.Services
+namespace ollamidesk.RAG.Services.Interfaces
 {
     public interface IEmbeddingService
     {

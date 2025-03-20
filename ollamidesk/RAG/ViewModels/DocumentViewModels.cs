@@ -11,6 +11,7 @@ using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Services;
 using ollamidesk.RAG;
+using ollamidesk.RAG.Services.Interfaces; // Add this import
 
 namespace ollamidesk.RAG.ViewModels
 {

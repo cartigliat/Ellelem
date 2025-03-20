@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Services;
+using ollamidesk.RAG.Services.Interfaces;
 using ollamidesk.RAG.ViewModels;
 using ollamidesk.DependencyInjection;
 using ollamidesk.Services;
@@ -16,26 +17,28 @@ namespace ollamidesk
         private readonly MainViewModel _viewModel;
         private readonly IOllamaModel _ollamaModel;
         private readonly RagDiagnosticsService _diagnostics;
-        private readonly MainWindowRagHelper _ragHelper;
+        private readonly IDiagnosticsUIService _diagnosticsUIService;
         private string? _loadedDocument;
 
         // Constructor with DI
         public MainWindow(
             MainViewModel viewModel,
             IOllamaModel ollamaModel,
-            RagDiagnosticsService diagnostics)
+            RagDiagnosticsService diagnostics,
+            IDiagnosticsUIService diagnosticsUIService)
         {
             InitializeComponent();
 
             _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
             _ollamaModel = ollamaModel ?? throw new ArgumentNullException(nameof(ollamaModel));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+            _diagnosticsUIService = diagnosticsUIService ?? throw new ArgumentNullException(nameof(diagnosticsUIService));
 
             // Set data context
             DataContext = _viewModel;
 
-            // Setup RAG helper
-            _ragHelper = new MainWindowRagHelper(this, _diagnostics);
+            // Setup diagnostics UI service with this window
+            _diagnosticsUIService.SetupDiagnosticsUI(this);
 
             // Setup initial RAG panel state
             UpdateRagPanelVisibility(_viewModel.DocumentViewModel.IsRagEnabled);
@@ -46,6 +49,12 @@ namespace ollamidesk
             // Log initialization
             _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
                 "Application initialized with RAG services");
+        }
+
+        private void FileExit_Click(object sender, RoutedEventArgs e)
+        {
+            // Close the application
+            this.Close();
         }
 
         private void MenuToggleButton_Click(object sender, RoutedEventArgs e)
@@ -119,8 +128,8 @@ namespace ollamidesk
         {
             base.OnClosed(e);
 
-            // Clean up RAG diagnostics
-            _ragHelper?.Cleanup();
+            // Clean up diagnostic handlers
+            _diagnosticsUIService.UnregisterHandlers();
         }
 
         // RAG panel visibility handlers

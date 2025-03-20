@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
+using ollamidesk.RAG.Services.Interfaces; // Add this import
 
 namespace ollamidesk.RAG.Services
 {
@@ -46,6 +47,9 @@ namespace ollamidesk.RAG.Services
                 $"Service initialized with settings: ChunkSize={_chunkSize}, ChunkOverlap={_chunkOverlap}, " +
                 $"MaxRetrievedChunks={_maxRetrievedChunks}, MinSimilarityScore={_minSimilarityScore}");
         }
+
+        // Rest of the RagService implementation remains the same
+        // ...
 
         public async Task<List<Document>> GetAllDocumentsAsync()
         {

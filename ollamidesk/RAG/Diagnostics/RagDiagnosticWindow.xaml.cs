@@ -12,6 +12,8 @@ using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.DependencyInjection;
+using ollamidesk.RAG.Services.Interfaces;
+using ollamidesk.RAG.Services.Implementations; // Add this for OllamaEmbeddingService
 
 namespace ollamidesk.RAG.Diagnostics
 {
@@ -51,6 +53,7 @@ namespace ollamidesk.RAG.Diagnostics
             StatusText.Text = "Connected to application services via DI";
         }
 
+        // Rest of the class remains unchanged
         private void InitializeTimers()
         {
             // Setup timers for log updates

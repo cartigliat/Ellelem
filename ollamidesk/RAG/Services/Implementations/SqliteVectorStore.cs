@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
+using ollamidesk.RAG.Services;
 
 namespace ollamidesk.RAG.Services
 {

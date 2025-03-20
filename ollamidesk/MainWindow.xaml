@@ -24,126 +24,141 @@
 		<BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
 		<local:InverseBooleanToVisibilityConverter x:Key="NotProcessedToVisibilityConverter"/>
 		<local:StatusColorConverter x:Key="StatusColorConverter"/>
-
-
 	</Window.Resources>
 
 	<Grid>
-		<!-- Chat Panel (Main Content) -->
-		<Grid x:Name="ChatPanel">
-			<Grid.RowDefinitions>
-				<RowDefinition Height="Auto"/>
-				<RowDefinition Height="*"/>
-				<RowDefinition Height="Auto"/>
-			</Grid.RowDefinitions>
+		<!-- Top-Level Menu -->
+		<DockPanel>
+			<Menu DockPanel.Dock="Top" x:Name="MainMenu">
+				<MenuItem Header="File">
+					<MenuItem Header="Exit" Click="FileExit_Click"/>
+				</MenuItem>
+				<MenuItem Header="Tools">
+					<MenuItem Header="RAG Diagnostics"
+							  Command="{Binding DiagnosticsCommand}"
+							  InputGestureText="Ctrl+Shift+D"/>
+				</MenuItem>
+			</Menu>
 
-			<!-- Top Bar -->
-			<Grid Grid.Row="0" Background="#F5F5F5">
-				<Grid.ColumnDefinitions>
-					<ColumnDefinition Width="*"/>
-					<ColumnDefinition Width="Auto"/>
-				</Grid.ColumnDefinitions>
+			<!-- Main Grid Content -->
+			<Grid>
+				<!-- Chat Panel (Main Content) -->
+				<Grid x:Name="ChatPanel">
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto"/>
+						<RowDefinition Height="*"/>
+						<RowDefinition Height="Auto"/>
+					</Grid.RowDefinitions>
 
-				<StackPanel Grid.Column="0" Orientation="Horizontal" Margin="10">
-					<TextBlock Text="Model: " FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,5,0"/>
-					<TextBlock x:Name="ModelNameTextBlock" Text="{Binding ModelName}"
-                               VerticalAlignment="Center"
-                               FontSize="16"/>
-					<Button x:Name="MenuToggleButton" Content="Change Model" Margin="10,0,0,0"
-                            Padding="8,3" Click="MenuToggleButton_Click"/>
-				</StackPanel>
+					<!-- Top Bar -->
+					<Grid Grid.Row="0" Background="#F5F5F5">
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="*"/>
+							<ColumnDefinition Width="Auto"/>
+						</Grid.ColumnDefinitions>
 
-				<StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0">
-					<CheckBox x:Name="RagEnableCheckBox" Content="Enable RAG"
-					          IsChecked="{Binding DocumentViewModel.IsRagEnabled, Mode=TwoWay}"
-					          VerticalAlignment="Center"
-					          Margin="0,0,10,0"
-                              Checked="RagEnableCheckBox_Checked"
-                              Unchecked="RagEnableCheckBox_Unchecked"/>
-				</StackPanel>
+						<StackPanel Grid.Column="0" Orientation="Horizontal" Margin="10">
+							<TextBlock Text="Model: " FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,5,0"/>
+							<TextBlock x:Name="ModelNameTextBlock" Text="{Binding ModelName}"
+								   VerticalAlignment="Center"
+								   FontSize="16"/>
+							<Button x:Name="MenuToggleButton" Content="Change Model" Margin="10,0,0,0"
+									Padding="8,3" Click="MenuToggleButton_Click"/>
+						</StackPanel>
+
+						<StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0">
+							<CheckBox x:Name="RagEnableCheckBox" Content="Enable RAG"
+								  IsChecked="{Binding DocumentViewModel.IsRagEnabled, Mode=TwoWay}"
+								  VerticalAlignment="Center"
+								  Margin="0,0,10,0"
+								  Checked="RagEnableCheckBox_Checked"
+								  Unchecked="RagEnableCheckBox_Unchecked"/>
+						</StackPanel>
+					</Grid>
+
+					<!-- Chat History -->
+					<ScrollViewer x:Name="ChatHistoryScrollViewer"
+							  Grid.Row="1"
+							  VerticalScrollBarVisibility="Auto">
+						<ItemsControl x:Name="ChatHistoryItemsControl" ItemsSource="{Binding ChatHistory}">
+							<ItemsControl.ItemTemplate>
+								<DataTemplate>
+									<StackPanel>
+										<!-- User Query -->
+										<TextBlock Text="{Binding UserQuery}"
+												   Style="{StaticResource UserQueryStyle}"/>
+
+										<!-- Model Response -->
+										<StackPanel>
+											<TextBlock Text="{Binding ModelResponse}"
+													   Style="{StaticResource ModelResponseStyle}"/>
+
+											<!-- RAG Sources (if any) -->
+											<TextBlock Text="Sources used for this response"
+													   Visibility="{Binding UsedRag, Converter={StaticResource BooleanToVisibilityConverter}}"
+													   Margin="10,0,10,5"
+													   FontStyle="Italic"
+													   FontSize="11"
+													   Foreground="Gray"/>
+
+											<ItemsControl ItemsSource="{Binding SourceChunkIds}"
+														  Visibility="{Binding UsedRag, Converter={StaticResource BooleanToVisibilityConverter}}"
+														  Margin="20,0,10,10">
+												<ItemsControl.ItemTemplate>
+													<DataTemplate>
+														<TextBlock Text="{Binding}"
+															   FontSize="10"
+															   Foreground="Gray"/>
+													</DataTemplate>
+												</ItemsControl.ItemTemplate>
+											</ItemsControl>
+										</StackPanel>
+									</StackPanel>
+								</DataTemplate>
+							</ItemsControl.ItemTemplate>
+						</ItemsControl>
+					</ScrollViewer>
+
+					<!-- User Input Area -->
+					<Grid Grid.Row="2" Background="#F5F5F5">
+						<TextBox x:Name="UserInputTextBox"
+								 Text="{Binding UserInput, UpdateSourceTrigger=PropertyChanged}"
+								 Margin="10"
+								 Padding="5"
+								 FontSize="14"
+								 PreviewKeyDown="UserInputTextBox_PreviewKeyDown"
+								 AcceptsReturn="True"
+								 TextWrapping="Wrap"
+								 VerticalScrollBarVisibility="Auto"
+								 MinHeight="50"
+								 MaxHeight="150"/>
+					</Grid>
+
+					<!-- Loading Indicator -->
+					<Border x:Name="LoadingIndicator"
+							Grid.RowSpan="3"
+							Background="#80000000"
+							Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}">
+						<StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+							<TextBlock Text="Generating response..."
+								   Foreground="White"
+								   FontSize="16"
+								   Margin="0,0,0,10"/>
+							<ProgressBar IsIndeterminate="True"
+									 Width="200"
+									 Height="10"/>
+						</StackPanel>
+					</Border>
+				</Grid>
+
+				<!-- RAG Document Panel (Side window from right) -->
+				<Grid x:Name="RagPanel" Width="300" HorizontalAlignment="Right" Background="White"
+					  Visibility="Collapsed" Panel.ZIndex="1">
+					<views:DocumentLibraryView DataContext="{Binding DocumentViewModel}"
+											 BorderBrush="#DDDDDD"
+											 BorderThickness="1,0,0,0"/>
+				</Grid>
 			</Grid>
-
-			<!-- Chat History -->
-			<ScrollViewer x:Name="ChatHistoryScrollViewer"
-                          Grid.Row="1"
-                          VerticalScrollBarVisibility="Auto">
-				<ItemsControl x:Name="ChatHistoryItemsControl" ItemsSource="{Binding ChatHistory}">
-					<ItemsControl.ItemTemplate>
-						<DataTemplate>
-							<StackPanel>
-								<!-- User Query -->
-								<TextBlock Text="{Binding UserQuery}"
-                                           Style="{StaticResource UserQueryStyle}"/>
-
-								<!-- Model Response -->
-								<StackPanel>
-									<TextBlock Text="{Binding ModelResponse}"
-                                               Style="{StaticResource ModelResponseStyle}"/>
-
-									<!-- RAG Sources (if any) -->
-									<TextBlock Text="Sources used for this response"
-                                               Visibility="{Binding UsedRag, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                               Margin="10,0,10,5"
-                                               FontStyle="Italic"
-                                               FontSize="11"
-                                               Foreground="Gray"/>
-
-									<ItemsControl ItemsSource="{Binding SourceChunkIds}"
-                                                  Visibility="{Binding UsedRag, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                                  Margin="20,0,10,10">
-										<ItemsControl.ItemTemplate>
-											<DataTemplate>
-												<TextBlock Text="{Binding}"
-                                                           FontSize="10"
-                                                           Foreground="Gray"/>
-											</DataTemplate>
-										</ItemsControl.ItemTemplate>
-									</ItemsControl>
-								</StackPanel>
-							</StackPanel>
-						</DataTemplate>
-					</ItemsControl.ItemTemplate>
-				</ItemsControl>
-			</ScrollViewer>
-
-			<!-- User Input Area -->
-			<Grid Grid.Row="2" Background="#F5F5F5">
-				<TextBox x:Name="UserInputTextBox"
-                         Text="{Binding UserInput, UpdateSourceTrigger=PropertyChanged}"
-                         Margin="10"
-                         Padding="5"
-                         FontSize="14"
-                         PreviewKeyDown="UserInputTextBox_PreviewKeyDown"
-                         AcceptsReturn="True"
-                         TextWrapping="Wrap"
-                         VerticalScrollBarVisibility="Auto"
-                         MinHeight="50"
-                         MaxHeight="150"/>
-			</Grid>
-
-			<!-- Loading Indicator -->
-			<Border x:Name="LoadingIndicator"
-                    Grid.RowSpan="3"
-                    Background="#80000000"
-                    Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}">
-				<StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-					<TextBlock Text="Generating response..."
-                               Foreground="White"
-                               FontSize="16"
-                               Margin="0,0,0,10"/>
-					<ProgressBar IsIndeterminate="True"
-                                 Width="200"
-                                 Height="10"/>
-				</StackPanel>
-			</Border>
-		</Grid>
-
-		<!-- RAG Document Panel (Side window from right) -->
-		<Grid x:Name="RagPanel" Width="300" HorizontalAlignment="Right" Background="White"
-              Visibility="Collapsed" Panel.ZIndex="1">
-			<views:DocumentLibraryView DataContext="{Binding DocumentViewModel}"
-                                     BorderBrush="#DDDDDD"
-                                     BorderThickness="1,0,0,0"/>
-		</Grid>
+		</DockPanel>
 	</Grid>
 </Window>

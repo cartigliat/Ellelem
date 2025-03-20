@@ -4,6 +4,8 @@ using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
+using ollamidesk.RAG.Services.Interfaces;
+using ollamidesk.RAG.Services.Implementations;
 using ollamidesk.RAG.ViewModels;
 using ollamidesk.Services;
 
@@ -77,7 +79,20 @@ namespace ollamidesk.DependencyInjection
             services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>();
             services.AddSingleton<IVectorStore, SqliteVectorStore>(); // Updated from FileSystemVectorStore
             services.AddSingleton<IEmbeddingService, OllamaEmbeddingService>();
+
+            // Register the legacy RAG service (will be refactored later)
             services.AddSingleton<RagService>();
+
+            // Register the new RagServiceFacade
+            services.AddSingleton<RagServiceFacade>();
+
+            // Register the new refactored services
+            services.AddSingleton<IDocumentManagementService, DocumentManagementService>();
+            services.AddSingleton<IDocumentProcessingService, DocumentProcessingService>();
+            services.AddSingleton<IRetrievalService, RetrievalService>();
+            services.AddSingleton<IPromptEngineeringService, PromptEngineeringService>();
+            services.AddSingleton<IDiagnosticsUIService, DiagnosticsUIService>();
+            services.AddTransient<ShowDiagnosticsCommand>();
 
             // Register model factory and loader
             services.AddSingleton<OllamaModelFactory>();

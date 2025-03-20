@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using ollamidesk.RAG.Models;
 
-namespace ollamidesk.RAG.Services
+namespace ollamidesk.RAG.Services.Interfaces
 {
     public interface IDocumentRepository
     {

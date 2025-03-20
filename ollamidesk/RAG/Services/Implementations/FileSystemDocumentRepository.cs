@@ -7,8 +7,9 @@ using System.Threading.Tasks;
 using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
+using ollamidesk.RAG.Services.Interfaces; // Added this import
 
-namespace ollamidesk.RAG.Services
+namespace ollamidesk.RAG.Services.Implementations
 {
     public class FileSystemDocumentRepository : IDocumentRepository
     {
@@ -39,6 +40,9 @@ namespace ollamidesk.RAG.Services
             _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
                 $"Repository initialized with base path: {_basePath}");
         }
+
+        // Rest of implementation remains the same
+        // ...
 
         private async Task EnsureInitializedAsync()
         {

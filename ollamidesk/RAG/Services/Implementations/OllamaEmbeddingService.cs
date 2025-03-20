@@ -6,8 +6,9 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
+using ollamidesk.RAG.Services.Interfaces; // Add this import
 
-namespace ollamidesk.RAG.Services
+namespace ollamidesk.RAG.Services.Implementations
 {
     public class OllamaEmbeddingService : IEmbeddingService
     {

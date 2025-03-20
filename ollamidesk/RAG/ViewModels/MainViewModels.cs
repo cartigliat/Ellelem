@@ -9,6 +9,7 @@ using ollamidesk.Common.MVVM;
 using ollamidesk.Configuration;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
+using ollamidesk.RAG.Services.Interfaces;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.ViewModels;
 
@@ -19,6 +20,7 @@ namespace ollamidesk.RAG.ViewModels
         private IOllamaModel _modelService;
         private readonly RagDiagnosticsService _diagnostics;
         private readonly OllamaSettings _ollamaSettings;
+        private readonly IDiagnosticsUIService _diagnosticsUIService;
         private string _userInput = string.Empty;
         private string _modelName = string.Empty;
         private bool _isBusy;
@@ -58,22 +60,33 @@ namespace ollamidesk.RAG.ViewModels
         public ObservableCollection<ChatMessage> ChatHistory { get; } = new ObservableCollection<ChatMessage>();
         public DocumentViewModel DocumentViewModel { get; }
 
+        // Commands
         public ICommand SendMessageCommand { get; }
+        public ICommand DiagnosticsCommand { get; }
 
-        public MainViewModel(IOllamaModel modelService, DocumentViewModel documentViewModel,
-            OllamaSettings ollamaSettings, RagDiagnosticsService diagnostics)
+        public MainViewModel(
+            IOllamaModel modelService,
+            DocumentViewModel documentViewModel,
+            OllamaSettings ollamaSettings,
+            RagDiagnosticsService diagnostics,
+            IDiagnosticsUIService diagnosticsUIService)
         {
             _modelService = modelService ?? throw new ArgumentNullException(nameof(modelService));
             DocumentViewModel = documentViewModel ?? throw new ArgumentNullException(nameof(documentViewModel));
             _ollamaSettings = ollamaSettings ?? throw new ArgumentNullException(nameof(ollamaSettings));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+            _diagnosticsUIService = diagnosticsUIService ?? throw new ArgumentNullException(nameof(diagnosticsUIService));
 
             // Use default model name from settings
             ModelName = _ollamaSettings.DefaultModel;
 
+            // Initialize commands
             SendMessageCommand = new RelayCommand(
                 async _ => await SendMessageAsync(),
                 _ => !string.IsNullOrWhiteSpace(UserInput) && !IsBusy);
+
+            // Get diagnostics command from service
+            DiagnosticsCommand = _diagnosticsUIService.GetShowDiagnosticsCommand();
 
             // Initialize the chat history for the default model
             if (!string.IsNullOrEmpty(ModelName) && !_modelChatHistories.ContainsKey(ModelName))
@@ -83,6 +96,8 @@ namespace ollamidesk.RAG.ViewModels
 
             _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel", "ViewModel initialized");
         }
+
+        // Rest of the view model implementation remains the same...
 
         /// <summary>
         /// Updates the model service and refreshes the UI accordingly
