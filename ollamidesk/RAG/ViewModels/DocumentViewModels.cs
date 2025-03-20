@@ -9,15 +9,16 @@ using Microsoft.Win32;
 using ollamidesk.Common.MVVM;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Diagnostics;
-using ollamidesk.RAG.Services;
-using ollamidesk.RAG;
-using ollamidesk.RAG.Services.Interfaces; // Add this import
+using ollamidesk.RAG.Services.Interfaces;
 
 namespace ollamidesk.RAG.ViewModels
 {
-    public class DocumentViewModel : ViewModelBase, IRagProvider
+    public class DocumentViewModel : ViewModelBase
     {
-        private readonly RagService _ragService;
+        private readonly IDocumentManagementService _documentManagementService;
+        private readonly IDocumentProcessingService _documentProcessingService;
+        private readonly IRetrievalService _retrievalService;
+        private readonly IPromptEngineeringService _promptEngineeringService;
         private readonly RagDiagnosticsService _diagnostics;
         private readonly IDocumentRepository _documentRepository;
         private bool _isRagEnabled;
@@ -41,11 +42,17 @@ namespace ollamidesk.RAG.ViewModels
         public ICommand RefreshCommand { get; }
 
         public DocumentViewModel(
-            RagService ragService,
+            IDocumentManagementService documentManagementService,
+            IDocumentProcessingService documentProcessingService,
+            IRetrievalService retrievalService,
+            IPromptEngineeringService promptEngineeringService,
             RagDiagnosticsService diagnostics,
             IDocumentRepository documentRepository)
         {
-            _ragService = ragService ?? throw new ArgumentNullException(nameof(ragService));
+            _documentManagementService = documentManagementService ?? throw new ArgumentNullException(nameof(documentManagementService));
+            _documentProcessingService = documentProcessingService ?? throw new ArgumentNullException(nameof(documentProcessingService));
+            _retrievalService = retrievalService ?? throw new ArgumentNullException(nameof(retrievalService));
+            _promptEngineeringService = promptEngineeringService ?? throw new ArgumentNullException(nameof(promptEngineeringService));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
 
@@ -58,15 +65,6 @@ namespace ollamidesk.RAG.ViewModels
             _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel", "Initialized DocumentViewModel");
         }
 
-        /// <summary>
-        /// Gets the RAG service instance
-        /// </summary>
-        /// <returns>The RAG service</returns>
-        public RagService GetRagService()
-        {
-            return _ragService;
-        }
-
         public async Task LoadDocumentsAsync()
         {
             if (IsBusy) return;
@@ -76,7 +74,7 @@ namespace ollamidesk.RAG.ViewModels
                 IsBusy = true;
                 _diagnostics.StartOperation("LoadDocuments");
 
-                var documents = await _ragService.GetAllDocumentsAsync();
+                var documents = await _documentManagementService.GetAllDocumentsAsync();
 
                 // Update collection on UI thread using CollectionHelper
                 CollectionHelper.ClearSafely(Documents);
@@ -85,7 +83,12 @@ namespace ollamidesk.RAG.ViewModels
                 {
                     // Add documents one by one on UI thread
                     CollectionHelper.AddSafely(Documents,
-                        new DocumentItemViewModel(doc, _ragService, _diagnostics, _documentRepository));
+                        new DocumentItemViewModel(
+                            doc,
+                            _documentManagementService,
+                            _documentProcessingService,
+                            _diagnostics,
+                            _documentRepository));
                 }
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
@@ -126,11 +129,16 @@ namespace ollamidesk.RAG.ViewModels
                     _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
                         $"Adding document: {openFileDialog.FileName}");
 
-                    var document = await _ragService.AddDocumentAsync(openFileDialog.FileName);
+                    var document = await _documentManagementService.AddDocumentAsync(openFileDialog.FileName);
 
                     // Add new document to collection on UI thread
                     CollectionHelper.AddSafely(Documents,
-                        new DocumentItemViewModel(document, _ragService, _diagnostics, _documentRepository));
+                        new DocumentItemViewModel(
+                            document,
+                            _documentManagementService,
+                            _documentProcessingService,
+                            _diagnostics,
+                            _documentRepository));
 
                     _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
                         $"Document added successfully: {document.Id}");
@@ -179,12 +187,26 @@ namespace ollamidesk.RAG.ViewModels
                     return (query, new List<DocumentChunk>());
                 }
 
-                var (augmentedPrompt, sources) = await _ragService.GenerateAugmentedPromptAsync(query, selectedDocs);
+                // Retrieve relevant chunks using RetrievalService
+                var searchResults = await _retrievalService.RetrieveRelevantChunksAsync(query, selectedDocs);
+
+                if (searchResults.Count == 0)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Warning, "DocumentViewModel",
+                        "No relevant chunks found for the query");
+                    return (query, new List<DocumentChunk>());
+                }
+
+                // Extract chunks from search results
+                var relevantChunks = searchResults.Select(result => result.Chunk).ToList();
+
+                // Create augmented prompt using PromptEngineeringService
+                string augmentedPrompt = await _promptEngineeringService.CreateAugmentedPromptAsync(query, relevantChunks);
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
-                    $"Generated augmented prompt with {sources.Count} sources");
+                    $"Generated augmented prompt with {relevantChunks.Count} sources");
 
-                return (augmentedPrompt, sources.ToList());
+                return (augmentedPrompt, relevantChunks);
             }
             catch (Exception ex)
             {
@@ -208,7 +230,8 @@ namespace ollamidesk.RAG.ViewModels
 
     public class DocumentItemViewModel : ViewModelBase
     {
-        private readonly RagService _ragService;
+        private readonly IDocumentManagementService _documentManagementService;
+        private readonly IDocumentProcessingService _documentProcessingService;
         private readonly RagDiagnosticsService _diagnostics;
         private readonly IDocumentRepository _documentRepository;
         private bool _isSelected;
@@ -236,7 +259,7 @@ namespace ollamidesk.RAG.ViewModels
                     {
                         try
                         {
-                            await _ragService.UpdateDocumentSelectionAsync(Id, value);
+                            await _documentManagementService.UpdateDocumentSelectionAsync(Id, value);
 
                             _diagnostics.Log(DiagnosticLevel.Debug, "DocumentItemViewModel",
                                 $"Updated selection state for document {Id} to {value}");
@@ -278,11 +301,13 @@ namespace ollamidesk.RAG.ViewModels
 
         public DocumentItemViewModel(
             Document document,
-            RagService ragService,
+            IDocumentManagementService documentManagementService,
+            IDocumentProcessingService documentProcessingService,
             RagDiagnosticsService diagnostics,
             IDocumentRepository documentRepository)
         {
-            _ragService = ragService ?? throw new ArgumentNullException(nameof(ragService));
+            _documentManagementService = documentManagementService ?? throw new ArgumentNullException(nameof(documentManagementService));
+            _documentProcessingService = documentProcessingService ?? throw new ArgumentNullException(nameof(documentProcessingService));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
             _document = document ?? throw new ArgumentNullException(nameof(document));
@@ -363,8 +388,8 @@ namespace ollamidesk.RAG.ViewModels
                     OnPropertyChanged(nameof(IsContentTruncated));
                 }
 
-                // Process the document
-                _document = await _ragService.ProcessDocumentAsync(Id);
+                // Process the document using DocumentProcessingService
+                _document = await _documentProcessingService.ProcessDocumentAsync(_document);
 
                 IsProcessed = true;
                 IsSelected = true;
@@ -405,7 +430,7 @@ namespace ollamidesk.RAG.ViewModels
                     _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                         $"Deleting document: {Id}");
 
-                    await _ragService.DeleteDocumentAsync(Id);
+                    await _documentManagementService.DeleteDocumentAsync(Id);
 
                     // Remove from collection - find parent ViewModel
                     var parentViewModel = GetParentViewModel();

@@ -21,6 +21,8 @@ namespace ollamidesk.RAG.ViewModels
         private readonly RagDiagnosticsService _diagnostics;
         private readonly OllamaSettings _ollamaSettings;
         private readonly IDiagnosticsUIService _diagnosticsUIService;
+        private readonly IRetrievalService _retrievalService;
+        private readonly IPromptEngineeringService _promptEngineeringService;
         private string _userInput = string.Empty;
         private string _modelName = string.Empty;
         private bool _isBusy;
@@ -69,13 +71,17 @@ namespace ollamidesk.RAG.ViewModels
             DocumentViewModel documentViewModel,
             OllamaSettings ollamaSettings,
             RagDiagnosticsService diagnostics,
-            IDiagnosticsUIService diagnosticsUIService)
+            IDiagnosticsUIService diagnosticsUIService,
+            IRetrievalService retrievalService,
+            IPromptEngineeringService promptEngineeringService)
         {
             _modelService = modelService ?? throw new ArgumentNullException(nameof(modelService));
             DocumentViewModel = documentViewModel ?? throw new ArgumentNullException(nameof(documentViewModel));
             _ollamaSettings = ollamaSettings ?? throw new ArgumentNullException(nameof(ollamaSettings));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _diagnosticsUIService = diagnosticsUIService ?? throw new ArgumentNullException(nameof(diagnosticsUIService));
+            _retrievalService = retrievalService ?? throw new ArgumentNullException(nameof(retrievalService));
+            _promptEngineeringService = promptEngineeringService ?? throw new ArgumentNullException(nameof(promptEngineeringService));
 
             // Use default model name from settings
             ModelName = _ollamaSettings.DefaultModel;
@@ -96,8 +102,6 @@ namespace ollamidesk.RAG.ViewModels
 
             _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel", "ViewModel initialized");
         }
-
-        // Rest of the view model implementation remains the same...
 
         /// <summary>
         /// Updates the model service and refreshes the UI accordingly
@@ -218,10 +222,42 @@ namespace ollamidesk.RAG.ViewModels
                 if (DocumentViewModel.IsRagEnabled)
                 {
                     _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel", "Using RAG for this message");
-                    var (augmentedPrompt, retrievedSources) = await DocumentViewModel.GenerateAugmentedPromptAsync(userQuery);
-                    prompt = augmentedPrompt;
-                    sources = retrievedSources.ToList();
-                    usedRag = sources.Count > 0;
+
+                    // Get selected document IDs
+                    var selectedDocs = DocumentViewModel.Documents
+                        .Where(d => d.IsSelected && d.IsProcessed)
+                        .Select(d => d.Id)
+                        .ToList();
+
+                    if (selectedDocs.Count > 0)
+                    {
+                        // Retrieve relevant chunks using the RetrievalService
+                        var searchResults = await _retrievalService.RetrieveRelevantChunksAsync(userQuery, selectedDocs);
+
+                        // Extract chunks from search results
+                        var relevantChunks = searchResults.Select(result => result.Chunk).ToList();
+
+                        if (relevantChunks.Count > 0)
+                        {
+                            // Create augmented prompt using the PromptEngineeringService
+                            prompt = await _promptEngineeringService.CreateAugmentedPromptAsync(userQuery, relevantChunks);
+                            sources = relevantChunks;
+                            usedRag = true;
+
+                            _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel",
+                                $"Generated augmented prompt with {relevantChunks.Count} sources");
+                        }
+                        else
+                        {
+                            _diagnostics.Log(DiagnosticLevel.Warning, "MainViewModel",
+                                "No relevant chunks found for the query");
+                        }
+                    }
+                    else
+                    {
+                        _diagnostics.Log(DiagnosticLevel.Warning, "MainViewModel",
+                            "No processed documents selected for RAG");
+                    }
                 }
 
                 // Get chat history for context

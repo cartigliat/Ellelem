@@ -77,14 +77,8 @@ namespace ollamidesk.DependencyInjection
 
             // Register repositories and services
             services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>();
-            services.AddSingleton<IVectorStore, SqliteVectorStore>(); // Updated from FileSystemVectorStore
+            services.AddSingleton<IVectorStore, SqliteVectorStore>();
             services.AddSingleton<IEmbeddingService, OllamaEmbeddingService>();
-
-            // Register the legacy RAG service (will be refactored later)
-            services.AddSingleton<RagService>();
-
-            // Register the new RagServiceFacade
-            services.AddSingleton<RagServiceFacade>();
 
             // Register the new refactored services
             services.AddSingleton<IDocumentManagementService, DocumentManagementService>();
