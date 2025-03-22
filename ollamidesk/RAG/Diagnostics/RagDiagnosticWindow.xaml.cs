@@ -13,7 +13,7 @@ using ollamidesk.RAG.Services;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.DependencyInjection;
 using ollamidesk.RAG.Services.Interfaces;
-using ollamidesk.RAG.Services.Implementations; // Add this for OllamaEmbeddingService
+using ollamidesk.RAG.Services.Implementations;
 
 namespace ollamidesk.RAG.Diagnostics
 {
@@ -26,7 +26,8 @@ namespace ollamidesk.RAG.Diagnostics
         private readonly IEmbeddingService _embeddingService;
         private readonly IOllamaModel _ollamaModel;
         private readonly IVectorStore _vectorStore;
-        private readonly RagService _ragService;
+        private readonly IDocumentManagementService _documentManagementService;
+        private readonly IDocumentProcessingService _documentProcessingService;
 
         // Constructor with DI
         public RagDiagnosticWindow(
@@ -34,7 +35,8 @@ namespace ollamidesk.RAG.Diagnostics
             IEmbeddingService embeddingService,
             IOllamaModel ollamaModel,
             IVectorStore vectorStore,
-            RagService ragService)
+            IDocumentManagementService documentManagementService,
+            IDocumentProcessingService documentProcessingService)
         {
             InitializeComponent();
 
@@ -46,7 +48,8 @@ namespace ollamidesk.RAG.Diagnostics
             _embeddingService = embeddingService ?? throw new ArgumentNullException(nameof(embeddingService));
             _ollamaModel = ollamaModel ?? throw new ArgumentNullException(nameof(ollamaModel));
             _vectorStore = vectorStore ?? throw new ArgumentNullException(nameof(vectorStore));
-            _ragService = ragService ?? throw new ArgumentNullException(nameof(ragService));
+            _documentManagementService = documentManagementService ?? throw new ArgumentNullException(nameof(documentManagementService));
+            _documentProcessingService = documentProcessingService ?? throw new ArgumentNullException(nameof(documentProcessingService));
 
             InitializeTimers();
 
@@ -501,12 +504,12 @@ It should be processed correctly by the chunking algorithm.";
 
                     // Test adding and processing the document
                     results.AppendLine($"Adding test document: {Path.GetFileName(fileName)}");
-                    var document = await _ragService.AddDocumentAsync(fileName);
+                    var document = await _documentManagementService.AddDocumentAsync(fileName);
 
                     results.AppendLine($"Document added with ID: {document.Id}");
                     results.AppendLine($"Processing document...");
 
-                    document = await _ragService.ProcessDocumentAsync(document.Id);
+                    document = await _documentProcessingService.ProcessDocumentAsync(document);
 
                     results.AppendLine($"Document processed. Generated {document.Chunks.Count} chunks:");
 
@@ -521,7 +524,7 @@ It should be processed correctly by the chunking algorithm.";
 
                     // Clean up
                     results.AppendLine("\nCleaning up test document...");
-                    await _ragService.DeleteDocumentAsync(document.Id);
+                    await _documentManagementService.DeleteDocumentAsync(document.Id);
 
                     ChunkingStatusText.Text = "SUCCESS";
                 }
