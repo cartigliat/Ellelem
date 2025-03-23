@@ -8,6 +8,8 @@ using ollamidesk.RAG.Services.Interfaces;
 using ollamidesk.RAG.Services.Implementations;
 using ollamidesk.RAG.ViewModels;
 using ollamidesk.Services;
+using ollamidesk.RAG.DocumentProcessors.Interfaces;
+using ollamidesk.RAG.DocumentProcessors.Implementations;
 
 namespace ollamidesk.DependencyInjection
 {
@@ -74,6 +76,13 @@ namespace ollamidesk.DependencyInjection
 
             // Configure HttpClient using our configuration class
             HttpClientConfiguration.ConfigureHttpClients(services, appSettings);
+
+            // Register document processors
+            services.AddSingleton<IDocumentProcessor, TextDocumentProcessor>();
+            services.AddSingleton<IDocumentProcessor, MarkdownDocumentProcessor>();
+            services.AddSingleton<IDocumentProcessor, PdfDocumentProcessor>();
+            services.AddSingleton<IDocumentProcessor, WordDocumentProcessor>();
+            services.AddSingleton<DocumentProcessorFactory>();
 
             // Register repositories and services
             services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>();

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services.Interfaces;
+using ollamidesk.RAG.DocumentProcessors.Implementations;
 
 namespace ollamidesk.RAG.Services.Implementations
 {
@@ -15,13 +16,16 @@ namespace ollamidesk.RAG.Services.Implementations
     {
         private readonly IDocumentRepository _documentRepository;
         private readonly RagDiagnosticsService _diagnostics;
+        private readonly DocumentProcessorFactory _documentProcessorFactory;
 
         public DocumentManagementService(
             IDocumentRepository documentRepository,
-            RagDiagnosticsService diagnostics)
+            RagDiagnosticsService diagnostics,
+            DocumentProcessorFactory documentProcessorFactory)
         {
             _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+            _documentProcessorFactory = documentProcessorFactory ?? throw new ArgumentNullException(nameof(documentProcessorFactory));
 
             _diagnostics.Log(DiagnosticLevel.Info, "DocumentManagementService", "Initialized DocumentManagementService");
         }
@@ -44,6 +48,9 @@ namespace ollamidesk.RAG.Services.Implementations
                 long fileSize = fileInfo.Length;
                 string name = Path.GetFileName(filePath);
                 string extension = Path.GetExtension(filePath).ToLowerInvariant();
+
+                // Determine document type from extension
+                string documentType = GetDocumentTypeFromExtension(extension);
 
                 // Determine if we should load the full content or just a preview
                 bool isLargeFile = fileSize > 10 * 1024 * 1024; // 10MB threshold
@@ -75,12 +82,13 @@ namespace ollamidesk.RAG.Services.Implementations
                     IsProcessed = false,
                     IsSelected = false,
                     FileSize = fileSize,
-                    IsContentTruncated = isContentTruncated
+                    IsContentTruncated = isContentTruncated,
+                    DocumentType = documentType
                 };
 
                 await _documentRepository.SaveDocumentAsync(document);
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentManagementService",
-                    $"Document added with ID: {document.Id}, size: {fileSize / 1024.0:F2} KB");
+                    $"Document added with ID: {document.Id}, Type: {documentType}, Size: {fileSize / 1024.0:F2} KB");
 
                 return document;
             }
@@ -98,9 +106,11 @@ namespace ollamidesk.RAG.Services.Implementations
 
         private async Task<string> LoadDocumentPreviewAsync(string filePath, string extension)
         {
-            // For text-based files, load just a preview
-            if (IsTextFile(extension))
+            try
             {
+                // Try to use the appropriate processor for a preview
+                var processor = _documentProcessorFactory.GetProcessor(extension);
+
                 using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
                 using (var reader = new StreamReader(stream))
                 {
@@ -113,60 +123,52 @@ namespace ollamidesk.RAG.Services.Implementations
                     return preview + "\n\n[... Content truncated (large file) ...]";
                 }
             }
-
-            // For binary or other files, provide a placeholder
-            return $"[Large {extension} file, size: {new FileInfo(filePath).Length / (1024.0 * 1024.0):F2} MB]";
+            catch (NotSupportedException)
+            {
+                // If no processor is available, provide a generic message
+                return $"[Large {extension} file, size: {new FileInfo(filePath).Length / (1024.0 * 1024.0):F2} MB]";
+            }
         }
 
         private async Task<string> LoadDocumentContentAsync(string filePath, string extension)
         {
-            // Load full content based on file type
-            if (IsTextFile(extension))
+            try
             {
-                return await File.ReadAllTextAsync(filePath);
-            }
-            else if (extension == ".pdf")
-            {
-                // For PDF, you would need a proper PDF reader
-                // For now, treat as plain text but log the need for PDF handling
-                _diagnostics.Log(DiagnosticLevel.Warning, "DocumentManagementService",
-                    "PDF handling is not implemented, treating as text");
+                // Get appropriate document processor
+                var processor = _documentProcessorFactory.GetProcessor(extension);
 
-                try
-                {
-                    return await File.ReadAllTextAsync(filePath);
-                }
-                catch
-                {
-                    return $"[Binary PDF file, size: {new FileInfo(filePath).Length / 1024.0:F2} KB]";
-                }
+                // Extract text from document
+                return await processor.ExtractTextAsync(filePath);
             }
-            else
+            catch (NotSupportedException)
             {
                 _diagnostics.Log(DiagnosticLevel.Warning, "DocumentManagementService",
-                    $"Unknown file type: {extension}, treating as text");
+                    $"Unknown file type: {extension}, treating as binary");
 
-                try
-                {
-                    return await File.ReadAllTextAsync(filePath);
-                }
-                catch
-                {
-                    return $"[Binary file with extension {extension}, size: {new FileInfo(filePath).Length / 1024.0:F2} KB]";
-                }
+                return $"[Binary file with extension {extension}, size: {new FileInfo(filePath).Length / 1024.0:F2} KB]";
             }
         }
 
-        private bool IsTextFile(string extension)
+        private string GetDocumentTypeFromExtension(string extension)
         {
-            // List of common text file extensions
-            string[] textExtensions = new[] {
-                ".txt", ".md", ".cs", ".json", ".xml", ".html", ".htm", ".css",
-                ".js", ".ts", ".py", ".java", ".c", ".cpp", ".h", ".hpp",
-                ".sql", ".yaml", ".yml", ".config", ".ini", ".log"
+            return extension.ToLowerInvariant() switch
+            {
+                ".txt" => "Text",
+                ".md" or ".markdown" => "Markdown",
+                ".pdf" => "PDF",
+                ".docx" => "Word",
+                ".doc" => "Word",
+                ".rtf" => "Rich Text",
+                ".html" or ".htm" => "HTML",
+                ".csv" => "CSV",
+                ".json" => "JSON",
+                ".xml" => "XML",
+                ".cs" => "C# Source",
+                ".js" => "JavaScript",
+                ".py" => "Python",
+                ".java" => "Java",
+                _ => "Unknown"
             };
-
-            return Array.IndexOf(textExtensions, extension.ToLowerInvariant()) >= 0;
         }
 
         public async Task<Document> GetDocumentAsync(string id)

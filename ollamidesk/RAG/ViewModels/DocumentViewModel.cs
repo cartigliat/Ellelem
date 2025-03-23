@@ -10,6 +10,7 @@ using ollamidesk.Common.MVVM;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Services.Interfaces;
+using ollamidesk.RAG.DocumentProcessors.Implementations;
 
 namespace ollamidesk.RAG.ViewModels
 {
@@ -21,6 +22,7 @@ namespace ollamidesk.RAG.ViewModels
         private readonly IPromptEngineeringService _promptEngineeringService;
         private readonly RagDiagnosticsService _diagnostics;
         private readonly IDocumentRepository _documentRepository;
+        private readonly DocumentProcessorFactory _documentProcessorFactory;
         private bool _isRagEnabled;
         private bool _isBusy;
 
@@ -47,7 +49,8 @@ namespace ollamidesk.RAG.ViewModels
             IRetrievalService retrievalService,
             IPromptEngineeringService promptEngineeringService,
             RagDiagnosticsService diagnostics,
-            IDocumentRepository documentRepository)
+            IDocumentRepository documentRepository,
+            DocumentProcessorFactory documentProcessorFactory)
         {
             _documentManagementService = documentManagementService ?? throw new ArgumentNullException(nameof(documentManagementService));
             _documentProcessingService = documentProcessingService ?? throw new ArgumentNullException(nameof(documentProcessingService));
@@ -55,6 +58,7 @@ namespace ollamidesk.RAG.ViewModels
             _promptEngineeringService = promptEngineeringService ?? throw new ArgumentNullException(nameof(promptEngineeringService));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
+            _documentProcessorFactory = documentProcessorFactory ?? throw new ArgumentNullException(nameof(documentProcessorFactory));
 
             AddDocumentCommand = new RelayCommand(async _ => await AddDocumentAsync());
             RefreshCommand = new RelayCommand(async _ => await LoadDocumentsAsync());
@@ -114,51 +118,72 @@ namespace ollamidesk.RAG.ViewModels
 
         private async Task AddDocumentAsync()
         {
-            var openFileDialog = new OpenFileDialog
+            try
             {
-                Filter = "Text files (*.txt)|*.txt|PDF files (*.pdf)|*.pdf|Code files (*.cs;*.js;*.py;*.java)|*.cs;*.js;*.py;*.java|All files (*.*)|*.*",
-                Title = "Select document to add"
-            };
+                // Get supported file extensions
+                string[] supportedExtensions = _documentProcessorFactory.GetSupportedExtensions();
 
-            if (openFileDialog.ShowDialog() == true)
-            {
-                try
+                // Build filter string for dialog
+                string filter = "All supported documents|";
+                filter += string.Join(";", supportedExtensions.Select(ext => $"*{ext}"));
+                filter += "|Word Documents (*.docx)|*.docx";
+                filter += "|PDF Files (*.pdf)|*.pdf";
+                filter += "|Text Files (*.txt)|*.txt";
+                filter += "|Markdown Files (*.md)|*.md";
+                filter += "|All Files (*.*)|*.*";
+
+                var openFileDialog = new OpenFileDialog
                 {
-                    IsBusy = true;
-                    _diagnostics.StartOperation("AddDocument");
-                    _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
-                        $"Adding document: {openFileDialog.FileName}");
+                    Filter = filter,
+                    Title = "Select document to add"
+                };
 
-                    var document = await _documentManagementService.AddDocumentAsync(openFileDialog.FileName);
-
-                    // Add new document to collection on UI thread
-                    CollectionHelper.AddSafely(Documents,
-                        new DocumentItemViewModel(
-                            document,
-                            _documentManagementService,
-                            _documentProcessingService,
-                            _diagnostics,
-                            _documentRepository));
-
-                    _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
-                        $"Document added successfully: {document.Id}");
-                }
-                catch (Exception ex)
+                if (openFileDialog.ShowDialog() == true)
                 {
-                    _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
-                        $"Error adding document: {ex.Message}");
-
-                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                    try
                     {
-                        MessageBox.Show($"Error adding document: {ex.Message}", "Error",
-                            MessageBoxButton.OK, MessageBoxImage.Error);
-                    });
+                        IsBusy = true;
+                        _diagnostics.StartOperation("AddDocument");
+                        _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
+                            $"Adding document: {openFileDialog.FileName}");
+
+                        var document = await _documentManagementService.AddDocumentAsync(openFileDialog.FileName);
+
+                        // Add new document to collection on UI thread
+                        CollectionHelper.AddSafely(Documents,
+                            new DocumentItemViewModel(
+                                document,
+                                _documentManagementService,
+                                _documentProcessingService,
+                                _diagnostics,
+                                _documentRepository));
+
+                        _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
+                            $"Document added successfully: {document.Id}");
+                    }
+                    catch (Exception ex)
+                    {
+                        _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
+                            $"Error adding document: {ex.Message}");
+
+                        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            MessageBox.Show($"Error adding document: {ex.Message}", "Error",
+                                MessageBoxButton.OK, MessageBoxImage.Error);
+                        });
+                    }
+                    finally
+                    {
+                        IsBusy = false;
+                        _diagnostics.EndOperation("AddDocument");
+                    }
                 }
-                finally
-                {
-                    IsBusy = false;
-                    _diagnostics.EndOperation("AddDocument");
-                }
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
+                    $"Error preparing document dialog: {ex.Message}");
+                MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -245,6 +270,9 @@ namespace ollamidesk.RAG.ViewModels
         public bool IsLargeFile => _document.IsLargeFile;
         public bool IsContentTruncated => _document.IsContentTruncated;
         public string FileSizeDisplay => FormatFileSize(_document.FileSize);
+
+        // New property for document type
+        public string DocumentType => _document.DocumentType;
 
         public bool IsSelected
         {
