@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Net;
 using System.Net.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
@@ -27,6 +28,18 @@ namespace ollamidesk.Services
                 client.Timeout = TimeSpan.FromSeconds(appSettings.Ollama.TimeoutSeconds);
                 client.DefaultRequestHeaders.Add("Accept", "application/json");
                 client.DefaultRequestHeaders.Add("User-Agent", "OllamaDesk/1.0");
+
+                // Configure connection reuse
+                client.DefaultRequestHeaders.ConnectionClose = false; // Keep connection alive
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                // Connection pooling and reuse configuration
+                PooledConnectionLifetime = TimeSpan.FromMinutes(10), // Keep connections alive for 10 minutes
+                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5), // Close idle connections after 5 minutes
+                MaxConnectionsPerServer = 20, // Allow up to 20 concurrent connections per server
+                EnableMultipleHttp2Connections = true, // Enable multiple HTTP/2 connections
+                AutomaticDecompression = DecompressionMethods.All, // Automatically handle compressed responses
             })
             .AddPolicyHandler(GetRetryPolicy(appSettings.Ollama.MaxRetries, appSettings.Ollama.RetryDelayMs))
             .AddPolicyHandler(GetCircuitBreakerPolicy());

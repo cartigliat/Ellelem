@@ -41,9 +41,6 @@ namespace ollamidesk.RAG.Services.Implementations
                 $"Repository initialized with base path: {_basePath}");
         }
 
-        // Rest of implementation remains the same
-        // ...
-
         private async Task EnsureInitializedAsync()
         {
             if (_isInitialized)
@@ -60,12 +57,7 @@ namespace ollamidesk.RAG.Services.Implementations
                     {
                         foreach (var doc in documents)
                         {
-                            // For large files, don't load content in metadata
-                            if (doc.IsLargeFile)
-                            {
-                                doc.Content = $"[Large file: {doc.FileSize / (1024.0 * 1024.0):F2} MB - Use LoadFullContentAsync to view]";
-                                doc.IsContentTruncated = true;
-                            }
+                            // We now always store full content
                             _documentsCache[doc.Id] = doc;
                         }
                     }
@@ -88,7 +80,7 @@ namespace ollamidesk.RAG.Services.Implementations
         {
             try
             {
-                // Clone documents for serialization, removing content for large files
+                // Clone documents for serialization
                 var documentsToSave = _documentsCache.Values.Select(doc =>
                 {
                     // Create a shallow copy
@@ -101,14 +93,11 @@ namespace ollamidesk.RAG.Services.Implementations
                         IsProcessed = doc.IsProcessed,
                         IsSelected = doc.IsSelected,
                         FileSize = doc.FileSize,
-                        IsContentTruncated = doc.IsLargeFile // Always mark large files as truncated in metadata
+                        DocumentType = doc.DocumentType
                     };
 
-                    // Only include content for small files
-                    if (!doc.IsLargeFile)
-                    {
-                        docCopy.Content = doc.Content;
-                    }
+                    // Always include content
+                    docCopy.Content = doc.Content;
 
                     return docCopy;
                 }).ToList();
@@ -155,12 +144,6 @@ namespace ollamidesk.RAG.Services.Implementations
                 throw new KeyNotFoundException($"Document with ID {documentId} not found");
             }
 
-            // If it's not a large file or content is already loaded, return as is
-            if (!document.IsLargeFile || !document.IsContentTruncated)
-            {
-                return document;
-            }
-
             try
             {
                 _diagnostics.StartOperation("LoadFullDocumentContent");
@@ -173,13 +156,12 @@ namespace ollamidesk.RAG.Services.Implementations
                 }
 
                 _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
-                    $"Loading full content for large document: {document.Id}, size: {document.FileSize / (1024.0 * 1024.0):F2} MB");
+                    $"Loading full content for document: {document.Id}, size: {document.FileSize / (1024.0 * 1024.0):F2} MB");
 
                 // For text files, read the actual content
                 if (IsTextFile(Path.GetExtension(document.FilePath)))
                 {
                     document.Content = await File.ReadAllTextAsync(document.FilePath);
-                    document.IsContentTruncated = false;
 
                     _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
                         $"Loaded full content, length: {document.Content.Length} characters");
@@ -208,8 +190,8 @@ namespace ollamidesk.RAG.Services.Implementations
         {
             await EnsureInitializedAsync();
 
-            // For large files, only save content to disk if it's not truncated
-            if (!document.IsContentTruncated && !string.IsNullOrEmpty(document.Content))
+            // Always save content to disk
+            if (!string.IsNullOrEmpty(document.Content))
             {
                 string documentPath = Path.Combine(_documentsFolder, $"{document.Id}.txt");
                 await File.WriteAllTextAsync(documentPath, document.Content);

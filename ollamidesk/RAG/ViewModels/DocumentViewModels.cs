@@ -261,14 +261,13 @@ namespace ollamidesk.RAG.ViewModels
         private readonly IDocumentRepository _documentRepository;
         private bool _isSelected;
         private bool _isProcessing;
-        private bool _isLoadingFullContent;
         private Document _document; // Reference to the actual document
 
         public string Id { get; }
         public string Name { get; }
         public bool IsProcessed { get; private set; }
-        public bool IsLargeFile => _document.IsLargeFile;
-        public bool IsContentTruncated => _document.IsContentTruncated;
+
+        // Keep FileSize for informational purposes
         public string FileSizeDisplay => FormatFileSize(_document.FileSize);
 
         // New property for document type
@@ -309,23 +308,14 @@ namespace ollamidesk.RAG.ViewModels
             set => SetProperty(ref _isProcessing, value);
         }
 
-        public bool IsLoadingFullContent
-        {
-            get => _isLoadingFullContent;
-            set => SetProperty(ref _isLoadingFullContent, value);
-        }
-
         public string Status => IsProcessed
             ? "Processed"
             : (IsProcessing
                 ? "Processing..."
-                : (IsLargeFile
-                    ? "Large File"
-                    : "Not Processed"));
+                : "Not Processed");
 
         public ICommand ProcessCommand { get; }
         public ICommand DeleteCommand { get; }
-        public ICommand LoadFullContentCommand { get; }
 
         public DocumentItemViewModel(
             Document document,
@@ -351,48 +341,7 @@ namespace ollamidesk.RAG.ViewModels
 
             DeleteCommand = new RelayCommand(
                 async _ => await DeleteDocumentAsync(),
-                _ => !IsProcessing && !IsLoadingFullContent);
-
-            LoadFullContentCommand = new RelayCommand(
-                async _ => await LoadFullContentAsync(),
-                _ => IsContentTruncated && !IsLoadingFullContent);
-        }
-
-        private async Task LoadFullContentAsync()
-        {
-            try
-            {
-                IsLoadingFullContent = true;
-
-                _diagnostics.StartOperation("LoadFullDocumentContent");
-                _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
-                    $"Loading full content for document: {Id}");
-
-                // Load full content
-                _document = await _documentRepository.LoadFullContentAsync(Id);
-
-                // Notify UI of changes
-                OnPropertyChanged(nameof(IsContentTruncated));
-
-                _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
-                    $"Full content loaded for document: {Id}, content length: {_document.Content.Length} chars");
-            }
-            catch (Exception ex)
-            {
-                _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
-                    $"Error loading full content: {ex.Message}");
-
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                {
-                    MessageBox.Show($"Error loading full document content: {ex.Message}", "Error",
-                        MessageBoxButton.OK, MessageBoxImage.Error);
-                });
-            }
-            finally
-            {
-                IsLoadingFullContent = false;
-                _diagnostics.EndOperation("LoadFullDocumentContent");
-            }
+                _ => !IsProcessing);
         }
 
         private async Task ProcessDocumentAsync()
@@ -405,16 +354,6 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.StartOperation("ProcessDocument");
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                     $"Processing document: {Id}");
-
-                // For large files that still have truncated content, load full content first
-                if (IsLargeFile && IsContentTruncated)
-                {
-                    _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
-                        $"Large file with truncated content detected, loading full content before processing");
-
-                    _document = await _documentRepository.LoadFullContentAsync(Id);
-                    OnPropertyChanged(nameof(IsContentTruncated));
-                }
 
                 // Process the document using DocumentProcessingService
                 _document = await _documentProcessingService.ProcessDocumentAsync(_document);

@@ -1,3 +1,4 @@
+// DocumentManagementService.cs - Simplified document loading
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -43,7 +44,7 @@ namespace ollamidesk.RAG.Services.Implementations
             {
                 _diagnostics.StartOperation("AddDocument");
 
-                // Determine file size
+                // Get file information
                 var fileInfo = new FileInfo(filePath);
                 long fileSize = fileInfo.Length;
                 string name = Path.GetFileName(filePath);
@@ -52,27 +53,11 @@ namespace ollamidesk.RAG.Services.Implementations
                 // Determine document type from extension
                 string documentType = GetDocumentTypeFromExtension(extension);
 
-                // Determine if we should load the full content or just a preview
-                bool isLargeFile = fileSize > 10 * 1024 * 1024; // 10MB threshold
-                bool loadPreviewOnly = isLargeFile && !loadFullContent;
+                // Always load full content
+                _diagnostics.Log(DiagnosticLevel.Info, "DocumentManagementService",
+                    $"Loading full document content ({fileSize / 1024.0:F2} KB)");
 
-                // Load content based on file size and settings
-                string content;
-                bool isContentTruncated = false;
-
-                if (loadPreviewOnly)
-                {
-                    _diagnostics.Log(DiagnosticLevel.Info, "DocumentManagementService",
-                        $"Large document detected ({fileSize / (1024.0 * 1024.0):F2} MB), loading preview only");
-                    content = await LoadDocumentPreviewAsync(filePath, extension);
-                    isContentTruncated = true;
-                }
-                else
-                {
-                    _diagnostics.Log(DiagnosticLevel.Info, "DocumentManagementService",
-                        $"Loading full document content ({fileSize / 1024.0:F2} KB)");
-                    content = await LoadDocumentContentAsync(filePath, extension);
-                }
+                string content = await LoadDocumentContentAsync(filePath, extension);
 
                 var document = new Document
                 {
@@ -82,7 +67,6 @@ namespace ollamidesk.RAG.Services.Implementations
                     IsProcessed = false,
                     IsSelected = false,
                     FileSize = fileSize,
-                    IsContentTruncated = isContentTruncated,
                     DocumentType = documentType
                 };
 
@@ -101,32 +85,6 @@ namespace ollamidesk.RAG.Services.Implementations
             finally
             {
                 _diagnostics.EndOperation("AddDocument");
-            }
-        }
-
-        private async Task<string> LoadDocumentPreviewAsync(string filePath, string extension)
-        {
-            try
-            {
-                // Try to use the appropriate processor for a preview
-                var processor = _documentProcessorFactory.GetProcessor(extension);
-
-                using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
-                using (var reader = new StreamReader(stream))
-                {
-                    const int previewSize = 100 * 1024; // 100KB preview
-                    char[] buffer = new char[previewSize];
-                    int read = await reader.ReadBlockAsync(buffer, 0, buffer.Length);
-
-                    // Add a message indicating the content is truncated
-                    string preview = new string(buffer, 0, read);
-                    return preview + "\n\n[... Content truncated (large file) ...]";
-                }
-            }
-            catch (NotSupportedException)
-            {
-                // If no processor is available, provide a generic message
-                return $"[Large {extension} file, size: {new FileInfo(filePath).Length / (1024.0 * 1024.0):F2} MB]";
             }
         }
 

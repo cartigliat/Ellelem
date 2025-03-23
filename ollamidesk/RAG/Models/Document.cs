@@ -1,3 +1,4 @@
+// Document.cs - Updated model
 using System;
 using System.Collections.Generic;
 
@@ -12,9 +13,7 @@ namespace ollamidesk.RAG.Models
         public DateTime DateAdded { get; set; } = DateTime.Now;
         public bool IsProcessed { get; set; }
         public bool IsSelected { get; set; }
-        public long FileSize { get; set; } // New property for file size
-        public bool IsLargeFile => FileSize > 10 * 1024 * 1024; // 10MB threshold
-        public bool IsContentTruncated { get; set; } // Flag indicating if content is just a preview
+        public long FileSize { get; set; } // Keeping file size for informational purposes
         public List<DocumentChunk> Chunks { get; set; } = new List<DocumentChunk>();
 
         // Added property for document type
@@ -24,6 +23,7 @@ namespace ollamidesk.RAG.Models
         public Dictionary<string, string> Metadata { get; set; } = new Dictionary<string, string>();
     }
 
+    // DocumentChunk class remains unchanged
     public class DocumentChunk
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();

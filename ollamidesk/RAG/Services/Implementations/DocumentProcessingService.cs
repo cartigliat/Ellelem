@@ -22,6 +22,7 @@ namespace ollamidesk.RAG.Services.Implementations
         private readonly RagDiagnosticsService _diagnostics;
         private readonly int _chunkSize;
         private readonly int _chunkOverlap;
+        private readonly int _embeddingBatchSize = 15; // Default batch size for embedding generation
 
         public DocumentProcessingService(
             IDocumentRepository documentRepository,
@@ -42,7 +43,14 @@ namespace ollamidesk.RAG.Services.Implementations
             _chunkOverlap = ragSettings.ChunkOverlap;
 
             _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
-                $"Service initialized with settings: ChunkSize={_chunkSize}, ChunkOverlap={_chunkOverlap}");
+                $"Service initialized with settings: ChunkSize={_chunkSize}, ChunkOverlap={_chunkOverlap}, EmbeddingBatchSize={_embeddingBatchSize}");
+        }
+
+        // Adding back the required interface method, but with simplified implementation
+        public Task<Document> LoadFullContentAsync(Document document)
+        {
+            // Simply return the document as-is since we always have full content now
+            return Task.FromResult(document);
         }
 
         public async Task<Document> ProcessDocumentAsync(Document document)
@@ -57,19 +65,6 @@ namespace ollamidesk.RAG.Services.Implementations
                 if (document == null)
                 {
                     throw new ArgumentNullException(nameof(document));
-                }
-
-                // If content is truncated, load the full content before processing
-                if (document.IsContentTruncated)
-                {
-                    _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
-                        $"Document content is truncated, loading full content before processing");
-
-                    document = await LoadFullContentAsync(document);
-                    if (document.IsContentTruncated)
-                    {
-                        throw new InvalidOperationException("Failed to load full document content for processing");
-                    }
                 }
 
                 // Create chunks
@@ -122,29 +117,39 @@ namespace ollamidesk.RAG.Services.Implementations
                     }
                 }
 
-                // Generate embeddings for each chunk
+                // Generate embeddings for chunks using batch processing
                 _diagnostics.StartOperation("GenerateChunkEmbeddings");
                 int processedChunks = 0;
-                foreach (var chunk in document.Chunks)
+
+                // Process chunks in batches
+                for (int i = 0; i < document.Chunks.Count; i += _embeddingBatchSize)
                 {
+                    // Get current batch (up to batchSize chunks)
+                    int currentBatchSize = Math.Min(_embeddingBatchSize, document.Chunks.Count - i);
+                    var batch = document.Chunks.GetRange(i, currentBatchSize);
+
+                    // Create tasks for parallel processing
+                    var tasks = new Task[batch.Count];
+
+                    for (int j = 0; j < batch.Count; j++)
+                    {
+                        var chunk = batch[j];
+                        tasks[j] = ProcessChunkEmbeddingAsync(chunk);
+                    }
+
                     try
                     {
-                        chunk.Embedding = await _embeddingService.GenerateEmbeddingAsync(chunk.Content);
-                        processedChunks++;
+                        // Wait for all tasks in this batch to complete
+                        await Task.WhenAll(tasks);
 
-                        if (processedChunks % 5 == 0)
-                        {
-                            _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
-                                $"Generated embeddings for {processedChunks}/{document.Chunks.Count} chunks");
-                        }
+                        processedChunks += batch.Count;
+                        _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
+                            $"Generated embeddings for {processedChunks}/{document.Chunks.Count} chunks");
                     }
                     catch (Exception ex)
                     {
                         _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService",
-                            $"Failed to generate embedding for chunk {chunk.Id}: {ex.Message}");
-
-                        // Skip this chunk rather than failing the entire process
-                        chunk.Embedding = new float[0]; // Empty embedding
+                            $"Failed to process batch starting at index {i}: {ex.Message}");
                     }
                 }
                 _diagnostics.EndOperation("GenerateChunkEmbeddings");
@@ -187,6 +192,21 @@ namespace ollamidesk.RAG.Services.Implementations
             }
         }
 
+        // Helper method for processing a single chunk's embedding
+        private async Task ProcessChunkEmbeddingAsync(DocumentChunk chunk)
+        {
+            try
+            {
+                chunk.Embedding = await _embeddingService.GenerateEmbeddingAsync(chunk.Content);
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService",
+                    $"Failed to generate embedding for chunk {chunk.Id}: {ex.Message}");
+                chunk.Embedding = new float[0]; // Empty embedding
+            }
+        }
+
         public async Task<List<DocumentChunk>> ChunkDocumentAsync(Document document)
         {
             if (document == null || string.IsNullOrWhiteSpace(document.Content))
@@ -225,32 +245,6 @@ namespace ollamidesk.RAG.Services.Implementations
                 $"Document {document.Id} chunked into {chunks.Count} pieces");
 
             return await Task.FromResult(chunks);
-        }
-
-        public async Task<Document> LoadFullContentAsync(Document document)
-        {
-            if (document == null)
-                throw new ArgumentNullException(nameof(document));
-
-            try
-            {
-                // If it's not a large file or content is already loaded, return as is
-                if (!document.IsLargeFile || !document.IsContentTruncated)
-                {
-                    return document;
-                }
-
-                _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
-                    $"Loading full content for document: {document.Id}");
-
-                return await _documentRepository.LoadFullContentAsync(document.Id);
-            }
-            catch (Exception ex)
-            {
-                _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService",
-                    $"Error loading full content: {ex.Message}");
-                throw;
-            }
         }
 
         // Helper methods for chunking

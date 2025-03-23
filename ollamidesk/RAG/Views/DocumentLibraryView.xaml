@@ -48,26 +48,13 @@
 							<TextBlock Text="{Binding Status}" Foreground="{Binding IsProcessed, Converter={StaticResource StatusColorConverter}}"/>
 						</StackPanel>
 
-						<!-- File Size and Large File Indicator -->
+						<!-- File Size Display -->
 						<StackPanel Grid.Column="1" Grid.Row="1" Margin="10,3,0,0" Orientation="Horizontal">
 							<TextBlock Text="{Binding FileSizeDisplay}" FontSize="10" Foreground="Gray"/>
-							<TextBlock Text=" | " FontSize="10" Foreground="Gray"
-                                       Visibility="{Binding IsLargeFile, Converter={StaticResource BooleanToVisibilityConverter}}"/>
-							<TextBlock Text="Large File" FontSize="10" Foreground="Orange" FontStyle="Italic"
-                                       Visibility="{Binding IsLargeFile, Converter={StaticResource BooleanToVisibilityConverter}}"/>
-							<TextBlock Text=" | " FontSize="10" Foreground="Gray"
-                                       Visibility="{Binding IsContentTruncated, Converter={StaticResource BooleanToVisibilityConverter}}"/>
-							<TextBlock Text="Preview Only" FontSize="10" Foreground="Gray" FontStyle="Italic"
-                                       Visibility="{Binding IsContentTruncated, Converter={StaticResource BooleanToVisibilityConverter}}"/>
 						</StackPanel>
 
 						<!-- Actions -->
 						<StackPanel Grid.Column="2" Grid.Row="0" Grid.RowSpan="2" Orientation="Vertical">
-							<Button Content="Load Full"
-                                    Command="{Binding LoadFullContentCommand}"
-                                    Visibility="{Binding IsContentTruncated, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                    Margin="0,0,0,3"
-                                    Padding="5,2"/>
 							<Button Content="Process"
                                     Command="{Binding ProcessCommand}"
                                     Visibility="{Binding IsProcessed, Converter={StaticResource NotProcessedToVisibilityConverter}}"
