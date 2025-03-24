@@ -20,7 +20,7 @@ namespace ollamidesk.Configuration
     public class OllamaSettings
     {
         public string ApiBaseUrl { get; set; } = "http://localhost:11434";
-        public string DefaultModel { get; set; } = "llama2";
+        public string DefaultModel { get; set; } = "llama3.2:1b";
         public string EmbeddingModel { get; set; } = "nomic-embed-text";
         public int TimeoutSeconds { get; set; } = 60;
         public int MaxRetries { get; set; } = 3;
@@ -41,7 +41,7 @@ namespace ollamidesk.Configuration
     {
         public int ChunkSize { get; set; } = 500;
         public int ChunkOverlap { get; set; } = 100;
-        public int MaxRetrievedChunks { get; set; } = 5;
+        public int MaxRetrievedChunks { get; set; } = 4;
         public float MinSimilarityScore { get; set; } = 0.1f;
     }
 

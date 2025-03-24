@@ -15,7 +15,7 @@ namespace ollamidesk.RAG.Services.Interfaces
         Task<List<(DocumentChunk Chunk, float Score)>> RetrieveRelevantChunksAsync(
             string query,
             List<string> documentIds,
-            int maxResults = 5);
+            int maxResults = 4);
 
         /// <summary>
         /// Calculates the relevance score between a query and a chunk

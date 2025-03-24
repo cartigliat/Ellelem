@@ -43,7 +43,7 @@ namespace ollamidesk.RAG.Services.Implementations
         public async Task<List<(DocumentChunk Chunk, float Score)>> RetrieveRelevantChunksAsync(
             string query,
             List<string> documentIds,
-            int maxResults = 5)
+            int maxResults = 4)
         {
             if (string.IsNullOrWhiteSpace(query))
             {
