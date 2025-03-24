@@ -20,30 +20,24 @@ namespace ollamidesk.RAG.Services.Implementations
         private readonly IEmbeddingService _embeddingService;
         private readonly IVectorStore _vectorStore;
         private readonly RagDiagnosticsService _diagnostics;
-        private readonly int _chunkSize;
-        private readonly int _chunkOverlap;
+        private readonly IRagConfigurationService _configService;
         private readonly int _embeddingBatchSize = 15; // Default batch size for embedding generation
 
         public DocumentProcessingService(
             IDocumentRepository documentRepository,
             IEmbeddingService embeddingService,
             IVectorStore vectorStore,
-            RagSettings ragSettings,
+            IRagConfigurationService configService,
             RagDiagnosticsService diagnostics)
         {
             _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
             _embeddingService = embeddingService ?? throw new ArgumentNullException(nameof(embeddingService));
             _vectorStore = vectorStore ?? throw new ArgumentNullException(nameof(vectorStore));
+            _configService = configService ?? throw new ArgumentNullException(nameof(configService));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
-            if (ragSettings == null)
-                throw new ArgumentNullException(nameof(ragSettings));
-
-            _chunkSize = ragSettings.ChunkSize;
-            _chunkOverlap = ragSettings.ChunkOverlap;
-
             _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
-                $"Service initialized with settings: ChunkSize={_chunkSize}, ChunkOverlap={_chunkOverlap}, EmbeddingBatchSize={_embeddingBatchSize}");
+                $"Service initialized with settings: ChunkSize={_configService.ChunkSize}, ChunkOverlap={_configService.ChunkOverlap}, EmbeddingBatchSize={_embeddingBatchSize}");
         }
 
         // Adding back the required interface method, but with simplified implementation
@@ -81,7 +75,7 @@ namespace ollamidesk.RAG.Services.Implementations
                         $"No chunks were created for document: {document.Id}");
 
                     // Create at least one chunk with the entire content (if it's not too large)
-                    if (document.Content.Length <= _chunkSize * 2)
+                    if (document.Content.Length <= _configService.ChunkSize * 2)
                     {
                         document.Chunks.Add(new DocumentChunk
                         {
@@ -97,11 +91,11 @@ namespace ollamidesk.RAG.Services.Implementations
                     else
                     {
                         // For larger documents, create fixed-size chunks as a fallback
-                        int chunkCount = (int)Math.Ceiling((double)document.Content.Length / _chunkSize);
+                        int chunkCount = (int)Math.Ceiling((double)document.Content.Length / _configService.ChunkSize);
                         for (int i = 0; i < chunkCount; i++)
                         {
-                            int startPos = i * _chunkSize;
-                            int length = Math.Min(_chunkSize, document.Content.Length - startPos);
+                            int startPos = i * _configService.ChunkSize;
+                            int length = Math.Min(_configService.ChunkSize, document.Content.Length - startPos);
 
                             document.Chunks.Add(new DocumentChunk
                             {
@@ -265,7 +259,7 @@ namespace ollamidesk.RAG.Services.Implementations
 
                 // If adding this paragraph would exceed chunk size, finalize current chunk
                 if (currentChunk.Length > 0 &&
-                    currentChunk.Length + trimmedParagraph.Length > _chunkSize)
+                    currentChunk.Length + trimmedParagraph.Length > _configService.ChunkSize)
                 {
                     chunks.Add(new DocumentChunk
                     {
@@ -277,9 +271,9 @@ namespace ollamidesk.RAG.Services.Implementations
 
                     // Start new chunk with overlap
                     var lastChars = currentChunk.ToString();
-                    if (lastChars.Length > _chunkOverlap)
+                    if (lastChars.Length > _configService.ChunkOverlap)
                     {
-                        lastChars = lastChars.Substring(lastChars.Length - _chunkOverlap);
+                        lastChars = lastChars.Substring(lastChars.Length - _configService.ChunkOverlap);
                     }
 
                     currentChunk.Clear();
@@ -333,7 +327,7 @@ namespace ollamidesk.RAG.Services.Implementations
                     continue;
 
                 // For very large sections, split them further
-                if (section.Length > _chunkSize * 1.5)
+                if (section.Length > _configService.ChunkSize * 1.5)
                 {
                     // Extract header
                     string header = headerMatches[i].Value;
@@ -439,7 +433,7 @@ namespace ollamidesk.RAG.Services.Implementations
                     continue;
 
                 // For very large code blocks, split them
-                if (codeBlock.Length > _chunkSize * 1.5)
+                if (codeBlock.Length > _configService.ChunkSize * 1.5)
                 {
                     // For code, we'll preserve lines to avoid breaking syntax
                     string[] lines = codeBlock.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
@@ -449,7 +443,7 @@ namespace ollamidesk.RAG.Services.Implementations
                     {
                         // If adding this line would exceed chunk size, finalize current chunk
                         if (currentChunk.Length > 0 &&
-                            currentChunk.Length + line.Length > _chunkSize)
+                            currentChunk.Length + line.Length > _configService.ChunkSize)
                         {
                             chunks.Add(new DocumentChunk
                             {

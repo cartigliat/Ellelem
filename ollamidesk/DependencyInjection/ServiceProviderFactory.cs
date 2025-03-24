@@ -51,6 +51,7 @@ namespace ollamidesk.DependencyInjection
 
             // Register services
             RegisterServices(services, appSettings);
+            services.AddSingleton<IRagConfigurationService, RagConfigurationService>();
 
             // Build the service provider
             _serviceProvider = services.BuildServiceProvider();

@@ -17,27 +17,21 @@ namespace ollamidesk.RAG.Services.Implementations
         private readonly IVectorStore _vectorStore;
         private readonly IEmbeddingService _embeddingService;
         private readonly RagDiagnosticsService _diagnostics;
-        private readonly float _minSimilarityScore;
-        private readonly int _maxRetrievedChunks;
+        private readonly IRagConfigurationService _configService;
 
         public RetrievalService(
             IVectorStore vectorStore,
             IEmbeddingService embeddingService,
-            RagSettings ragSettings,
+            IRagConfigurationService configService,
             RagDiagnosticsService diagnostics)
         {
             _vectorStore = vectorStore ?? throw new ArgumentNullException(nameof(vectorStore));
             _embeddingService = embeddingService ?? throw new ArgumentNullException(nameof(embeddingService));
+            _configService = configService ?? throw new ArgumentNullException(nameof(configService));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
-            if (ragSettings == null)
-                throw new ArgumentNullException(nameof(ragSettings));
-
-            _minSimilarityScore = ragSettings.MinSimilarityScore;
-            _maxRetrievedChunks = ragSettings.MaxRetrievedChunks;
-
             _diagnostics.Log(DiagnosticLevel.Info, "RetrievalService",
-                $"Initialized RetrievalService with min similarity score: {_minSimilarityScore}, max chunks: {_maxRetrievedChunks}");
+                $"Initialized RetrievalService with min similarity score: {_configService.MinSimilarityScore}, max chunks: {_configService.MaxRetrievedChunks}");
         }
 
         public async Task<List<(DocumentChunk Chunk, float Score)>> RetrieveRelevantChunksAsync(
@@ -67,7 +61,7 @@ namespace ollamidesk.RAG.Services.Implementations
                     $"Selected document IDs: {string.Join(", ", documentIds)}");
 
                 // Use the provided maxResults if specified, otherwise use configured value
-                int effectiveMaxResults = maxResults > 0 ? maxResults : _maxRetrievedChunks;
+                int effectiveMaxResults = maxResults > 0 ? maxResults : _configService.MaxRetrievedChunks;
 
                 // Generate embedding for query
                 _diagnostics.StartOperation("QueryEmbeddingGeneration");
@@ -84,7 +78,7 @@ namespace ollamidesk.RAG.Services.Implementations
 
                 // Filter by minimum similarity score
                 searchResults = searchResults
-                    .Where(r => r.Score >= _minSimilarityScore) // Filter out low similarity scores
+                    .Where(r => r.Score >= _configService.MinSimilarityScore) // Filter out low similarity scores
                     .Take(effectiveMaxResults)
                     .ToList();
 
