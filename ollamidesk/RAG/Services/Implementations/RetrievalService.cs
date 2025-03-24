@@ -74,14 +74,16 @@ namespace ollamidesk.RAG.Services.Implementations
                 var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(query);
                 _diagnostics.EndOperation("QueryEmbeddingGeneration");
 
-                // Search for similar chunks
+                // Use document-first search approach
                 _diagnostics.StartOperation("VectorSearch");
-                var searchResults = await _vectorStore.SearchAsync(queryEmbedding, effectiveMaxResults * 2); // Get more than needed
+                var searchResults = await _vectorStore.SearchInDocumentsAsync(
+                    queryEmbedding,
+                    documentIds,
+                    effectiveMaxResults * 2); // Get more than needed
                 _diagnostics.EndOperation("VectorSearch");
 
-                // Filter by selected documents and minimum similarity score
+                // Filter by minimum similarity score
                 searchResults = searchResults
-                    .Where(r => documentIds.Contains(r.Chunk.DocumentId))
                     .Where(r => r.Score >= _minSimilarityScore) // Filter out low similarity scores
                     .Take(effectiveMaxResults)
                     .ToList();

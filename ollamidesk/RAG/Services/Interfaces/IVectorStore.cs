@@ -9,5 +9,11 @@ namespace ollamidesk.RAG.Services
         Task AddVectorsAsync(List<DocumentChunk> chunks);
         Task RemoveVectorsAsync(string documentId);
         Task<List<(DocumentChunk Chunk, float Score)>> SearchAsync(float[] queryVector, int limit = 5);
+
+        // New method for document-first search approach
+        Task<List<(DocumentChunk Chunk, float Score)>> SearchInDocumentsAsync(
+            float[] queryVector,
+            List<string> documentIds,
+            int limit = 5);
     }
 }

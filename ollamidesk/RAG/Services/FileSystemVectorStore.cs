@@ -79,79 +79,163 @@ namespace ollamidesk.RAG.Services
 
         public async Task AddVectorsAsync(List<DocumentChunk> chunks)
         {
-            await EnsureInitializedAsync();
-
             if (chunks == null || chunks.Count == 0)
                 return;
 
-            // Group chunks by document ID
-            var docGroups = chunks.GroupBy(c => c.DocumentId);
+            await EnsureInitializedAsync();
+            _diagnostics.StartOperation("AddVectors");
 
-            lock (_lock)
+            try
             {
-                foreach (var group in docGroups)
+                // Group chunks by document ID
+                var docGroups = chunks.GroupBy(c => c.DocumentId);
+
+                lock (_lock)
                 {
-                    string documentId = group.Key;
+                    foreach (var group in docGroups)
+                    {
+                        string documentId = group.Key;
 
-                    // Remove existing chunks for this document
-                    _chunks.RemoveAll(c => c.DocumentId == documentId);
+                        // Remove existing chunks for this document
+                        _chunks.RemoveAll(c => c.DocumentId == documentId);
 
-                    // Add the new chunks
-                    _chunks.AddRange(group);
+                        // Add the new chunks
+                        _chunks.AddRange(group);
 
-                    // Save to file
-                    string filePath = Path.Combine(_vectorsFolder, $"{documentId}.vectors.json");
-                    string json = JsonSerializer.Serialize(group.ToList());
-                    File.WriteAllText(filePath, json);
+                        // Save to file
+                        string filePath = Path.Combine(_vectorsFolder, $"{documentId}.vectors.json");
+                        string json = JsonSerializer.Serialize(group.ToList());
+                        File.WriteAllText(filePath, json);
+                    }
                 }
-            }
 
-            _diagnostics.Log(DiagnosticLevel.Info, "FileSystemVectorStore",
-                $"Added {chunks.Count} vectors for {docGroups.Count()} documents");
+                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemVectorStore",
+                    $"Added {chunks.Count} vectors for {docGroups.Count()} documents");
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemVectorStore",
+                    $"Error adding vectors: {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                _diagnostics.EndOperation("AddVectors");
+            }
         }
 
         public async Task RemoveVectorsAsync(string documentId)
         {
             await EnsureInitializedAsync();
+            _diagnostics.StartOperation("RemoveVectors");
 
-            lock (_lock)
+            try
             {
-                // Remove from memory
-                int removed = _chunks.RemoveAll(c => c.DocumentId == documentId);
-
-                // Remove file
-                string filePath = Path.Combine(_vectorsFolder, $"{documentId}.vectors.json");
-                if (File.Exists(filePath))
+                lock (_lock)
                 {
-                    File.Delete(filePath);
-                }
+                    // Remove from memory
+                    int removed = _chunks.RemoveAll(c => c.DocumentId == documentId);
 
-                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemVectorStore",
-                    $"Removed {removed} vectors for document {documentId}");
+                    // Remove file
+                    string filePath = Path.Combine(_vectorsFolder, $"{documentId}.vectors.json");
+                    if (File.Exists(filePath))
+                    {
+                        File.Delete(filePath);
+                    }
+
+                    _diagnostics.Log(DiagnosticLevel.Info, "FileSystemVectorStore",
+                        $"Removed {removed} vectors for document {documentId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemVectorStore",
+                    $"Error removing vectors: {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                _diagnostics.EndOperation("RemoveVectors");
             }
         }
 
         public async Task<List<(DocumentChunk Chunk, float Score)>> SearchAsync(float[] queryVector, int limit = 5)
         {
             await EnsureInitializedAsync();
+            _diagnostics.StartOperation("VectorSearch");
 
-            if (queryVector == null || queryVector.Length == 0)
+            try
+            {
+                if (queryVector == null || queryVector.Length == 0)
+                    return new List<(DocumentChunk, float)>();
+
+                List<(DocumentChunk Chunk, float Score)> results;
+                lock (_lock)
+                {
+                    results = _chunks
+                        .Select(chunk => (Chunk: chunk, Score: CosineSimilarity(queryVector, chunk.Embedding)))
+                        .OrderByDescending(x => x.Score)
+                        .Take(limit)
+                        .ToList();
+                }
+
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemVectorStore",
+                    $"Search returned {results.Count} results with top score of {(results.Count > 0 ? results[0].Score.ToString("F4") : "N/A")}");
+
+                return results;
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemVectorStore",
+                    $"Error during vector search: {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                _diagnostics.EndOperation("VectorSearch");
+            }
+        }
+
+        public async Task<List<(DocumentChunk Chunk, float Score)>> SearchInDocumentsAsync(
+            float[] queryVector,
+            List<string> documentIds,
+            int limit = 5)
+        {
+            if (queryVector == null || queryVector.Length == 0 || documentIds == null || documentIds.Count == 0)
                 return new List<(DocumentChunk, float)>();
 
-            List<(DocumentChunk Chunk, float Score)> results;
-            lock (_lock)
+            await EnsureInitializedAsync();
+            _diagnostics.StartOperation("VectorSearchInDocuments");
+
+            try
             {
-                results = _chunks
-                    .Select(chunk => (Chunk: chunk, Score: CosineSimilarity(queryVector, chunk.Embedding)))
-                    .OrderByDescending(x => x.Score)
-                    .Take(limit)
-                    .ToList();
+                List<(DocumentChunk Chunk, float Score)> results;
+                lock (_lock)
+                {
+                    // First filter by document IDs, then calculate similarity
+                    results = _chunks
+                        .Where(chunk => documentIds.Contains(chunk.DocumentId))
+                        .Select(chunk => (Chunk: chunk, Score: CosineSimilarity(queryVector, chunk.Embedding)))
+                        .OrderByDescending(x => x.Score)
+                        .Take(limit)
+                        .ToList();
+                }
+
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemVectorStore",
+                    $"Document-first search returned {results.Count} results from {documentIds.Count} documents with top score of {(results.Count > 0 ? results[0].Score.ToString("F4") : "N/A")}");
+
+                return results;
             }
-
-            _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemVectorStore",
-                $"Search returned {results.Count} results with top score of {(results.Count > 0 ? results[0].Score.ToString("F4") : "N/A")}");
-
-            return results;
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemVectorStore",
+                    $"Error during document-filtered vector search: {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                _diagnostics.EndOperation("VectorSearchInDocuments");
+            }
         }
 
         private float CosineSimilarity(float[] v1, float[] v2)

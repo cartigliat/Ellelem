@@ -475,6 +475,87 @@ namespace ollamidesk.RAG.Services
             }
         }
 
+        public async Task<List<(DocumentChunk Chunk, float Score)>> SearchInDocumentsAsync(
+            float[] queryVector,
+            List<string> documentIds,
+            int limit = 5)
+        {
+            if (queryVector == null || queryVector.Length == 0 || documentIds == null || documentIds.Count == 0)
+                return new List<(DocumentChunk, float)>();
+
+            await EnsureInitializedAsync();
+            _diagnostics.StartOperation("VectorSearchInDocuments");
+
+            try
+            {
+                var results = new List<(DocumentChunk, float)>();
+
+                if (_connection == null)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
+                        "Connection is null during search");
+                    return results;
+                }
+
+                // Build document IDs parameter for SQL query
+                string documentIdsParam = string.Join(",", documentIds.Select(id => $"'{id}'"));
+
+                // Get chunks only from the specified documents
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = $"SELECT ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson FROM Chunks WHERE DocumentId IN ({documentIdsParam})";
+
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            // Create chunk
+                            var chunk = new DocumentChunk
+                            {
+                                Id = reader.GetString(0),
+                                DocumentId = reader.GetString(1),
+                                Content = reader.GetString(2),
+                                ChunkIndex = reader.GetInt32(3),
+                                Source = reader.GetString(4)
+                            };
+
+                            // Deserialize vector
+                            string vectorJson = reader.GetString(5);
+                            float[]? chunkEmbedding = JsonSerializer.Deserialize<float[]>(vectorJson);
+                            chunk.Embedding = chunkEmbedding ?? Array.Empty<float>();
+
+                            // Calculate similarity score
+                            float score = CosineSimilarity(queryVector, chunk.Embedding);
+
+                            // Add to results
+                            results.Add((chunk, score));
+                        }
+                    }
+                }
+
+                // Sort and limit results
+                results = results
+                    .OrderByDescending(x => x.Item2)
+                    .Take(limit)
+                    .ToList();
+
+                _diagnostics.Log(DiagnosticLevel.Debug, "SqliteVectorStore",
+                    $"Document-first search returned {results.Count} results from {documentIds.Count} documents with top score of {(results.Count > 0 ? results[0].Item2.ToString("F4") : "N/A")}");
+
+                return results;
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
+                    $"Error during document-filtered vector search: {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                _diagnostics.EndOperation("VectorSearchInDocuments");
+            }
+        }
+
         private float CosineSimilarity(float[] v1, float[]? v2)
         {
             if (v1 == null || v2 == null || v1.Length != v2.Length || v1.Length == 0)

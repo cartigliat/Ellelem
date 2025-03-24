@@ -9,7 +9,7 @@ namespace ollamidesk.RAG.Services
     public class InMemoryVectorStore : IVectorStore
     {
         private readonly List<DocumentChunk> _chunks = new();
-        private readonly object _lock = new();
+        private readonly object _lock = new object();
 
         public Task AddVectorsAsync(List<DocumentChunk> chunks)
         {
@@ -44,6 +44,26 @@ namespace ollamidesk.RAG.Services
             lock (_lock)
             {
                 results = _chunks
+                    .Select(chunk => (Chunk: chunk, Score: CosineSimilarity(queryVector, chunk.Embedding)))
+                    .OrderByDescending(x => x.Score)
+                    .Take(limit)
+                    .ToList();
+            }
+
+            return Task.FromResult(results);
+        }
+
+        public Task<List<(DocumentChunk Chunk, float Score)>> SearchInDocumentsAsync(float[] queryVector, List<string> documentIds, int limit = 5)
+        {
+            if (queryVector == null || queryVector.Length == 0 || documentIds == null || documentIds.Count == 0)
+                return Task.FromResult(new List<(DocumentChunk, float)>());
+
+            List<(DocumentChunk Chunk, float Score)> results;
+            lock (_lock)
+            {
+                // First filter by document IDs, then calculate similarity
+                results = _chunks
+                    .Where(chunk => documentIds.Contains(chunk.DocumentId))
                     .Select(chunk => (Chunk: chunk, Score: CosineSimilarity(queryVector, chunk.Embedding)))
                     .OrderByDescending(x => x.Score)
                     .Take(limit)
