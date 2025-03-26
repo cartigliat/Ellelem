@@ -78,38 +78,49 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                                 return $"[Empty or invalid Word document: {Path.GetFileName(filePath)}]";
                             }
 
-                            // Fixed null reference warning on line 88
+                            // FIXED: Fixed null reference warning on line 88
                             _diagnostics.Log(DiagnosticLevel.Debug, "WordDocumentProcessor",
-                                $"Document has MainDocumentPart: {(doc.MainDocumentPart != null)}, " +
-                                $"Document: {(doc.MainDocumentPart != null && doc.MainDocumentPart.Document != null)}, " +
-                                $"Body: {(doc.MainDocumentPart != null && doc.MainDocumentPart.Document != null ? doc.MainDocumentPart.Document.Body != null : false)}");
+                                $"Document structure check: " +
+                                $"MainDocumentPart exists: {doc.MainDocumentPart != null}, " +
+                                $"Document exists: {doc.MainDocumentPart?.Document != null}, " +
+                                $"Body exists: {doc.MainDocumentPart?.Document?.Body != null}");
 
-                            // Extract text from the document body
-                            int paragraphCount = 0;
-                            foreach (var paragraph in doc.MainDocumentPart.Document.Body.Elements<Paragraph>())
+                            // FIXED: Use a safe approach to access elements with null conditional operators
+                            var body = doc.MainDocumentPart?.Document?.Body;
+                            var paragraphs = body?.Elements<Paragraph>();
+                            if (paragraphs != null)
                             {
-                                var paragraphText = ExtractTextFromParagraph(paragraph);
-                                if (!string.IsNullOrWhiteSpace(paragraphText))
+                                // Extract text from the document body
+                                int paragraphCount = 0;
+                                foreach (var paragraph in paragraphs)
                                 {
-                                    textBuilder.AppendLine(paragraphText);
-                                    paragraphCount++;
+                                    var paragraphText = ExtractTextFromParagraph(paragraph);
+                                    if (!string.IsNullOrWhiteSpace(paragraphText))
+                                    {
+                                        textBuilder.AppendLine(paragraphText);
+                                        paragraphCount++;
+                                    }
                                 }
+                                _diagnostics.Log(DiagnosticLevel.Debug, "WordDocumentProcessor",
+                                    $"Processed {paragraphCount} paragraphs from document body");
                             }
-                            _diagnostics.Log(DiagnosticLevel.Debug, "WordDocumentProcessor",
-                                $"Processed {paragraphCount} paragraphs from document body");
 
                             // Also check for tables
-                            int tableCount = 0;
-                            foreach (var table in doc.MainDocumentPart.Document.Body.Elements<Table>())
+                            var tables = body?.Elements<Table>();
+                            if (tables != null)
                             {
-                                ExtractTextFromTable(table, textBuilder);
-                                tableCount++;
-                            }
+                                int tableCount = 0;
+                                foreach (var table in tables)
+                                {
+                                    ExtractTextFromTable(table, textBuilder);
+                                    tableCount++;
+                                }
 
-                            if (tableCount > 0)
-                            {
-                                _diagnostics.Log(DiagnosticLevel.Debug, "WordDocumentProcessor",
-                                    $"Processed {tableCount} tables from document");
+                                if (tableCount > 0)
+                                {
+                                    _diagnostics.Log(DiagnosticLevel.Debug, "WordDocumentProcessor",
+                                        $"Processed {tableCount} tables from document");
+                                }
                             }
                         }
 
@@ -213,7 +224,7 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                                 $"Extracted document title: \"{structuredDoc.Title}\"");
 
                             // Process the document content
-                            ProcessDocumentContent(doc.MainDocumentPart.Document.Body, structuredDoc);
+                            ProcessDocumentContent(doc.MainDocumentPart?.Document?.Body, structuredDoc);
                             _diagnostics.Log(DiagnosticLevel.Info, "WordDocumentProcessor",
                                 $"Processed document content into {structuredDoc.Elements.Count} structured elements");
                         }
@@ -320,8 +331,15 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
             }
         }
 
-        private void ProcessDocumentContent(Body body, StructuredDocument structuredDoc)
+        private void ProcessDocumentContent(Body? body, StructuredDocument structuredDoc)
         {
+            if (body == null)
+            {
+                _diagnostics.Log(DiagnosticLevel.Warning, "WordDocumentProcessor",
+                    "Cannot process document content: Body is null");
+                return;
+            }
+
             _diagnostics.StartOperation("ProcessWordDocumentContent");
 
             try
@@ -596,30 +614,39 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
             }
         }
 
-        private bool IsHeading(Paragraph paragraph)
+        private bool IsHeading(Paragraph? paragraph)
         {
-            if (paragraph.ParagraphProperties?.ParagraphStyleId?.Val != null)
-            {
-                string styleId = paragraph.ParagraphProperties.ParagraphStyleId.Val.Value;
-                return styleId.StartsWith("Heading") || styleId == "Title" || styleId == "Subtitle";
-            }
+            // FIXED: Added proper null checking for paragraph properties
+            if (paragraph?.ParagraphProperties?.ParagraphStyleId?.Val == null)
+                return false;
 
-            return false;
+            // FIXED: Safely get the style ID
+            string? styleId = paragraph.ParagraphProperties.ParagraphStyleId.Val.Value;
+            if (string.IsNullOrEmpty(styleId))
+                return false;
+
+            return styleId.StartsWith("Heading") || styleId == "Title" || styleId == "Subtitle";
         }
 
         private int GetHeadingLevel(Paragraph paragraph)
         {
-            if (paragraph.ParagraphProperties?.ParagraphStyleId?.Val != null)
-            {
-                string styleId = paragraph.ParagraphProperties.ParagraphStyleId.Val.Value;
+            // FIXED: Added proper null checking for paragraph properties
+            if (paragraph?.ParagraphProperties?.ParagraphStyleId?.Val == null)
+                return 3; // Default level if can't determine
 
-                if (styleId == "Title")
-                    return 1;
-                if (styleId == "Subtitle")
-                    return 2;
-                if (styleId.StartsWith("Heading") && int.TryParse(styleId.Substring(7), out int level))
-                    return level;
-            }
+            // FIXED: Safely get the style ID
+            string? styleId = paragraph.ParagraphProperties.ParagraphStyleId.Val.Value;
+            if (string.IsNullOrEmpty(styleId))
+                return 3;
+
+            if (styleId == "Title")
+                return 1;
+            if (styleId == "Subtitle")
+                return 2;
+
+            // FIXED: Only process if styleId is not null and starts with "Heading"
+            if (styleId.StartsWith("Heading") && int.TryParse(styleId.Substring(7), out int level))
+                return level;
 
             // Default to level 3 if we can't determine the level
             return 3;
@@ -709,32 +736,41 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
             // 3. Fall back to heuristic - if first row is centered and others aren't, likely a header
             bool firstRowCentered = firstRowCells.Any(cell =>
                 cell.Descendants<Paragraph>().Any(p =>
-                    p.ParagraphProperties?.Justification?.Val?.Value == JustificationValues.Center));
+                    p.ParagraphProperties?.Justification?.Val != null &&
+                    p.ParagraphProperties.Justification.Val.Value == JustificationValues.Center));
 
             return firstRowCentered;
         }
 
-        private Dictionary<string, string> ExtractParagraphMetadata(Paragraph paragraph)
+        private Dictionary<string, string> ExtractParagraphMetadata(Paragraph? paragraph)
         {
             var metadata = new Dictionary<string, string>();
 
-            if (paragraph?.ParagraphProperties != null)
+            if (paragraph != null)
             {
-                // Extract style information - Fixed null reference warning on lines 602-603
+                // FIXED: Safe extraction of style information
                 if (paragraph.ParagraphProperties?.ParagraphStyleId?.Val != null)
                 {
-                    string styleId = paragraph.ParagraphProperties.ParagraphStyleId.Val.Value ?? string.Empty;
+                    // Safely get the style ID
+                    string? styleId = paragraph.ParagraphProperties.ParagraphStyleId.Val.Value;
                     if (!string.IsNullOrEmpty(styleId))
                     {
                         metadata["Style"] = styleId;
                     }
                 }
 
-                // Extract alignment information - Fixed null reference warning on lines 613-619
+                // FIXED: Safe extraction of alignment information
                 if (paragraph.ParagraphProperties?.Justification?.Val != null)
                 {
-                    string alignment = paragraph.ParagraphProperties.Justification.Val.Value.ToString();
-                    metadata["Alignment"] = alignment;
+                    // Safely get the alignment
+                    var alignmentVal = paragraph.ParagraphProperties.Justification.Val.Value;
+
+                    // FIXED: No need to check for null since Val.Value was already checked
+                    string alignment = alignmentVal.ToString();
+                    if (!string.IsNullOrEmpty(alignment))
+                    {
+                        metadata["Alignment"] = alignment;
+                    }
                 }
 
                 // Extract formatting information
@@ -797,15 +833,24 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
             }
         }
 
-        private string ExtractTextFromTableCell(TableCell cell)
+        private string ExtractTextFromTableCell(TableCell? cell)
         {
             try
             {
                 var sb = new StringBuilder();
 
-                foreach (var paragraph in cell.Elements<Paragraph>())
+                // FIXED: Added null check for cell
+                if (cell != null)
                 {
-                    sb.AppendLine(ExtractTextFromParagraph(paragraph));
+                    // FIXED: Safe traversal of paragraphs collection
+                    var paragraphs = cell.Elements<Paragraph>();
+                    if (paragraphs != null)
+                    {
+                        foreach (var paragraph in paragraphs)
+                        {
+                            sb.AppendLine(ExtractTextFromParagraph(paragraph));
+                        }
+                    }
                 }
 
                 return sb.ToString().Trim();

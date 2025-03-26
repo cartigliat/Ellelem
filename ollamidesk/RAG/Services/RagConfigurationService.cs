@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -41,7 +42,8 @@ namespace ollamidesk.RAG.Services
         private bool _useSemanticChunking;
         private int _embeddingModelDimension;
 
-        public event PropertyChangedEventHandler PropertyChanged;
+        // Modified: Changed to nullable event handler
+        public event PropertyChangedEventHandler? PropertyChanged;
 
         public RagConfigurationService(
             RagSettings initialSettings,
@@ -153,14 +155,16 @@ namespace ollamidesk.RAG.Services
                 "Reset configuration to defaults");
         }
 
-        protected virtual void OnPropertyChanged([CallerMemberName] string propertyName = null)
+        // Modified: Updated to handle nullable propertyName
+        protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName ?? string.Empty));
         }
 
-        protected bool SetProperty<T>(ref T storage, T value, [CallerMemberName] string propertyName = null)
+        // Modified: Updated to handle nullable propertyName
+        protected bool SetProperty<T>(ref T storage, T value, [CallerMemberName] string? propertyName = null)
         {
-            if (Equals(storage, value)) return false;
+            if (EqualityComparer<T>.Default.Equals(storage, value)) return false;
 
             storage = value;
             OnPropertyChanged(propertyName);

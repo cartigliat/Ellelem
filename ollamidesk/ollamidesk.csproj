@@ -1,5 +1,4 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
 	<PropertyGroup>
 		<OutputType>WinExe</OutputType>
 		<TargetFramework>net8.0-windows</TargetFramework>
@@ -7,33 +6,42 @@
 		<Nullable>enable</Nullable>
 	</PropertyGroup>
 
-        <ItemGroup>
-               <PackageReference Include="BouncyCastle.Cryptography" Version="2.2.1" />
-               <PackageReference Include="itext7" Version="8.0.0" />
-               <PackageReference Include="itext7.commons" Version="8.0.0" />
-               <PackageReference Include="itext7.pdfhtml" Version="5.0.0" />
-               <PackageReference Include="itext7.pdfsweep" Version="4.0.0" />
-               <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.3" />
-               <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.3" />
-               <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.3" />
-               <PackageReference Include="Microsoft.Extensions.Http.Polly" Version="9.0.3" />
-               <PackageReference Include="System.Data.SQLite.Core" Version="1.0.118" />
-               <PackageReference Include="System.Net.Http.Json" Version="8.0.0" />
-               <PackageReference Include="System.Text.Json" Version="8.0.0" />
-               <PackageReference Include="Polly" Version="7.2.4" />
-               <PackageReference Include="Polly.Extensions.Http" Version="3.0.0" />
-               
-               <!-- Document processing libraries -->
-               <PackageReference Include="DocumentFormat.OpenXml" Version="2.20.0" />
-               <PackageReference Include="itext7.bouncy-castle-adapter" Version="8.0.0" />
-               <PackageReference Include="Markdig" Version="0.33.0" />
-		       <PackageReference Include="Spire.Doc" Version="11.5.12" />
-        </ItemGroup>
+	<!-- Force specific package versions to override transitive dependencies -->
+	<ItemGroup>
+		<PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
+		<PackageReference Include="System.Text.Json" Version="8.0.5" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- Updated iText Core packages -->
+		<PackageReference Include="itext" Version="8.0.2" />
+		<PackageReference Include="itext.commons" Version="8.0.2" />
+		<PackageReference Include="itext.bouncy-castle-adapter" Version="8.0.2" />
+
+		<!-- Other packages remain the same -->
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.3" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.3" />
+		<PackageReference Include="Microsoft.Extensions.Http" Version="9.0.3" />
+		<PackageReference Include="Microsoft.Extensions.Http.Polly" Version="9.0.3" />
+		<PackageReference Include="System.Data.SQLite.Core" Version="1.0.118" />
+		<PackageReference Include="System.Net.Http.Json" Version="8.0.0" />
+		<PackageReference Include="Polly" Version="7.2.4" />
+		<PackageReference Include="Polly.Extensions.Http" Version="3.0.0" />
+
+		<!-- Document processing libraries -->
+		<PackageReference Include="DocumentFormat.OpenXml" Version="2.20.0" />
+		<PackageReference Include="Markdig" Version="0.33.0" />
+		<PackageReference Include="Spire.Doc" Version="11.5.12" />
+	</ItemGroup>
+
+	<PropertyGroup>
+		<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+		<DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+	</PropertyGroup>
 
 	<ItemGroup>
 		<None Update="appsettings.json">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
 	</ItemGroup>
-
 </Project>
