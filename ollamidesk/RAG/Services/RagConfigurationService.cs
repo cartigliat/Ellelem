@@ -9,27 +9,9 @@ using ollamidesk.RAG.Diagnostics;
 namespace ollamidesk.RAG.Services
 {
     /// <summary>
-    /// Central service for managing all RAG configuration parameters
+    /// Central service for managing all RAG configuration parameters.
+    /// This is the single source of truth for RAG configuration in the application.
     /// </summary>
-    public interface IRagConfigurationService : INotifyPropertyChanged
-    {
-        // Core chunking parameters
-        int ChunkSize { get; set; }
-        int ChunkOverlap { get; set; }
-
-        // Retrieval parameters
-        int MaxRetrievedChunks { get; set; }
-        float MinSimilarityScore { get; set; }
-
-        // Additional parameters you might want to add
-        bool UseSemanticChunking { get; set; }
-        int EmbeddingModelDimension { get; set; }
-
-        // Methods
-        Task SaveConfigurationAsync();
-        Task ResetToDefaultsAsync();
-    }
-
     public class RagConfigurationService : IRagConfigurationService
     {
         private readonly RagDiagnosticsService _diagnostics;
@@ -45,6 +27,12 @@ namespace ollamidesk.RAG.Services
         // Modified: Changed to nullable event handler
         public event PropertyChangedEventHandler? PropertyChanged;
 
+        /// <summary>
+        /// Initializes a new instance of the RagConfigurationService class.
+        /// </summary>
+        /// <param name="initialSettings">Initial RAG settings</param>
+        /// <param name="configProvider">Configuration provider</param>
+        /// <param name="diagnostics">Diagnostics service</param>
         public RagConfigurationService(
             RagSettings initialSettings,
             ConfigurationProvider configProvider,
@@ -103,6 +91,25 @@ namespace ollamidesk.RAG.Services
             set => SetProperty(ref _embeddingModelDimension, value);
         }
 
+        /// <summary>
+        /// Returns a copy of the current RAG settings
+        /// </summary>
+        /// <returns>Current RAG settings</returns>
+        public RagSettings GetCurrentSettings()
+        {
+            return new RagSettings
+            {
+                ChunkSize = ChunkSize,
+                ChunkOverlap = ChunkOverlap,
+                MaxRetrievedChunks = MaxRetrievedChunks,
+                MinSimilarityScore = MinSimilarityScore
+                // Note: Extended properties not in RagSettings yet
+            };
+        }
+
+        /// <summary>
+        /// Saves configuration changes to disk
+        /// </summary>
         public async Task SaveConfigurationAsync()
         {
             try
@@ -140,6 +147,9 @@ namespace ollamidesk.RAG.Services
             }
         }
 
+        /// <summary>
+        /// Resets all configuration to default values
+        /// </summary>
         public async Task ResetToDefaultsAsync()
         {
             ChunkSize = 400;
@@ -155,13 +165,32 @@ namespace ollamidesk.RAG.Services
                 "Reset configuration to defaults");
         }
 
-        // Modified: Updated to handle nullable propertyName
+        /// <summary>
+        /// Applies a new configuration from RagSettings
+        /// </summary>
+        /// <param name="settings">New settings to apply</param>
+        public async Task ApplyConfigurationAsync(RagSettings settings)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            ChunkSize = settings.ChunkSize;
+            ChunkOverlap = settings.ChunkOverlap;
+            MaxRetrievedChunks = settings.MaxRetrievedChunks;
+            MinSimilarityScore = settings.MinSimilarityScore;
+
+            await SaveConfigurationAsync();
+
+            _diagnostics.Log(DiagnosticLevel.Info, "RagConfigurationService",
+                "Applied new configuration from settings");
+        }
+
+        // Property change notification methods remain unchanged...
         protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName ?? string.Empty));
         }
 
-        // Modified: Updated to handle nullable propertyName
         protected bool SetProperty<T>(ref T storage, T value, [CallerMemberName] string? propertyName = null)
         {
             if (EqualityComparer<T>.Default.Equals(storage, value)) return false;
