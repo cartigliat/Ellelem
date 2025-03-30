@@ -5,7 +5,9 @@ using System.Data.SQLite;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
 using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
@@ -20,6 +22,11 @@ namespace ollamidesk.RAG.Services
         private SQLiteConnection? _connection;
         private bool _isInitialized = false;
         private bool _disposedValue;
+
+        // Thread safety additions
+        private readonly SemaphoreSlim _connectionSemaphore = new SemaphoreSlim(1, 1);
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _documentLocks =
+            new ConcurrentDictionary<string, SemaphoreSlim>();
 
         public SqliteVectorStore(StorageSettings storageSettings, RagDiagnosticsService diagnostics)
         {
@@ -39,15 +46,23 @@ namespace ollamidesk.RAG.Services
                 $"Vector store initialized with database: {_dbPath}");
         }
 
+        // Get a document-specific lock
+        private SemaphoreSlim GetDocumentLock(string documentId)
+        {
+            return _documentLocks.GetOrAdd(documentId, _ => new SemaphoreSlim(1, 1));
+        }
+
         private async Task EnsureInitializedAsync()
         {
             if (_isInitialized)
                 return;
 
-            _diagnostics.StartOperation("InitializeVectorStore");
-
+            await _connectionSemaphore.WaitAsync();
             try
             {
+                if (_isInitialized)
+                    return;
+
                 // Create the connection string
                 string connectionString = $"Data Source={_dbPath};Version=3;";
 
@@ -103,7 +118,7 @@ namespace ollamidesk.RAG.Services
             }
             finally
             {
-                _diagnostics.EndOperation("InitializeVectorStore");
+                _connectionSemaphore.Release();
             }
         }
 
@@ -212,23 +227,33 @@ namespace ollamidesk.RAG.Services
                 foreach (var group in docGroups)
                 {
                     string documentId = group.Key;
+                    var documentLock = GetDocumentLock(documentId);
 
-                    // Add or update document entry
-                    if (_connection != null)
+                    // Acquire lock for this specific document
+                    await documentLock.WaitAsync();
+                    try
                     {
-                        using (var command = _connection.CreateCommand())
+                        // Add or update document entry
+                        if (_connection != null)
                         {
-                            command.CommandText = @"
-                                INSERT OR REPLACE INTO Documents (DocumentId, Name) 
-                                VALUES (@DocumentId, @Name)";
-                            command.Parameters.AddWithValue("@DocumentId", documentId);
-                            command.Parameters.AddWithValue("@Name", group.First().Source);
-                            await command.ExecuteNonQueryAsync();
+                            using (var command = _connection.CreateCommand())
+                            {
+                                command.CommandText = @"
+                                    INSERT OR REPLACE INTO Documents (DocumentId, Name) 
+                                    VALUES (@DocumentId, @Name)";
+                                command.Parameters.AddWithValue("@DocumentId", documentId);
+                                command.Parameters.AddWithValue("@Name", group.First().Source);
+                                await command.ExecuteNonQueryAsync();
+                            }
                         }
-                    }
 
-                    // Add chunks
-                    await AddVectorsInternalAsync(group.ToList());
+                        // Add chunks
+                        await AddVectorsInternalAsync(group.ToList());
+                    }
+                    finally
+                    {
+                        documentLock.Release();
+                    }
                 }
 
                 _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
@@ -342,49 +367,59 @@ namespace ollamidesk.RAG.Services
                     return;
                 }
 
-                // First count how many chunks will be removed
-                int chunksToRemove = 0;
-                using (var command = _connection.CreateCommand())
+                // Acquire document-specific lock
+                var documentLock = GetDocumentLock(documentId);
+                await documentLock.WaitAsync();
+                try
                 {
-                    command.CommandText = "SELECT COUNT(*) FROM Chunks WHERE DocumentId = @DocumentId";
-                    command.Parameters.AddWithValue("@DocumentId", documentId);
-                    chunksToRemove = Convert.ToInt32(await command.ExecuteScalarAsync());
-                }
+                    // First count how many chunks will be removed
+                    int chunksToRemove = 0;
+                    using (var command = _connection.CreateCommand())
+                    {
+                        command.CommandText = "SELECT COUNT(*) FROM Chunks WHERE DocumentId = @DocumentId";
+                        command.Parameters.AddWithValue("@DocumentId", documentId);
+                        chunksToRemove = Convert.ToInt32(await command.ExecuteScalarAsync());
+                    }
 
-                // Use a transaction for both operations
-                using (var transaction = _connection.BeginTransaction())
+                    // Use a transaction for both operations
+                    using (var transaction = _connection.BeginTransaction())
+                    {
+                        try
+                        {
+                            // Delete chunks
+                            using (var command = _connection.CreateCommand())
+                            {
+                                command.Transaction = transaction;
+                                command.CommandText = "DELETE FROM Chunks WHERE DocumentId = @DocumentId";
+                                command.Parameters.AddWithValue("@DocumentId", documentId);
+                                await command.ExecuteNonQueryAsync();
+                            }
+
+                            // Delete document
+                            using (var command = _connection.CreateCommand())
+                            {
+                                command.Transaction = transaction;
+                                command.CommandText = "DELETE FROM Documents WHERE DocumentId = @DocumentId";
+                                command.Parameters.AddWithValue("@DocumentId", documentId);
+                                await command.ExecuteNonQueryAsync();
+                            }
+
+                            transaction.Commit();
+                        }
+                        catch
+                        {
+                            transaction.Rollback();
+                            throw;
+                        }
+                    }
+
+                    _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
+                        $"Removed {chunksToRemove} vectors for document {documentId}");
+                }
+                finally
                 {
-                    try
-                    {
-                        // Delete chunks
-                        using (var command = _connection.CreateCommand())
-                        {
-                            command.Transaction = transaction;
-                            command.CommandText = "DELETE FROM Chunks WHERE DocumentId = @DocumentId";
-                            command.Parameters.AddWithValue("@DocumentId", documentId);
-                            await command.ExecuteNonQueryAsync();
-                        }
-
-                        // Delete document
-                        using (var command = _connection.CreateCommand())
-                        {
-                            command.Transaction = transaction;
-                            command.CommandText = "DELETE FROM Documents WHERE DocumentId = @DocumentId";
-                            command.Parameters.AddWithValue("@DocumentId", documentId);
-                            await command.ExecuteNonQueryAsync();
-                        }
-
-                        transaction.Commit();
-                    }
-                    catch
-                    {
-                        transaction.Rollback();
-                        throw;
-                    }
+                    documentLock.Release();
                 }
-
-                _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
-                    $"Removed {chunksToRemove} vectors for document {documentId}");
             }
             catch (Exception ex)
             {
@@ -417,9 +452,10 @@ namespace ollamidesk.RAG.Services
                     return results;
                 }
 
+                // We don't need a document-specific lock here since we're just reading
+                // and SQLite handles read concurrency
+
                 // Get all chunks and calculate similarity in memory
-                // Note: This is a simplified approach. For production use with large datasets,
-                // consider using SQLite extensions like sqlite-vss or implementing an indexing strategy
                 using (var command = _connection.CreateCommand())
                 {
                     command.CommandText = "SELECT ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson FROM Chunks";
@@ -496,6 +532,9 @@ namespace ollamidesk.RAG.Services
                         "Connection is null during search");
                     return results;
                 }
+
+                // We don't need document-specific locks here since we're just reading
+                // and SQLite handles read concurrency
 
                 // Build document IDs parameter for SQL query
                 string documentIdsParam = string.Join(",", documentIds.Select(id => $"'{id}'"));
@@ -591,6 +630,14 @@ namespace ollamidesk.RAG.Services
                     // Dispose managed resources
                     _connection?.Close();
                     _connection?.Dispose();
+                    _connectionSemaphore?.Dispose();
+
+                    // Dispose all document locks
+                    foreach (var documentLock in _documentLocks.Values)
+                    {
+                        documentLock?.Dispose();
+                    }
+                    _documentLocks.Clear();
                 }
 
                 _disposedValue = true;

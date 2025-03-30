@@ -1,17 +1,19 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
-using ollamidesk.RAG.Services.Interfaces; // Added this import
+using ollamidesk.RAG.Services.Interfaces;
 
 namespace ollamidesk.RAG.Services.Implementations
 {
-    public class FileSystemDocumentRepository : IDocumentRepository
+    public class FileSystemDocumentRepository : IDocumentRepository, IDisposable
     {
         private readonly string _basePath;
         private readonly string _metadataFile;
@@ -20,6 +22,12 @@ namespace ollamidesk.RAG.Services.Implementations
         private readonly Dictionary<string, Document> _documentsCache = new();
         private readonly RagDiagnosticsService _diagnostics;
         private bool _isInitialized = false;
+
+        // Thread safety additions
+        private readonly SemaphoreSlim _initializationLock = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _cacheLock = new SemaphoreSlim(1, 1);
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileSpecificLocks =
+            new ConcurrentDictionary<string, SemaphoreSlim>();
 
         public FileSystemDocumentRepository(StorageSettings storageSettings, RagDiagnosticsService diagnostics)
         {
@@ -41,69 +49,129 @@ namespace ollamidesk.RAG.Services.Implementations
                 $"Repository initialized with base path: {_basePath}");
         }
 
+        // Helper to get or create a lock for a specific file
+        private SemaphoreSlim GetFileLock(string filePath)
+        {
+            return _fileSpecificLocks.GetOrAdd(filePath, _ => new SemaphoreSlim(1, 1));
+        }
+
         private async Task EnsureInitializedAsync()
         {
             if (_isInitialized)
                 return;
 
-            if (File.Exists(_metadataFile))
+            await _initializationLock.WaitAsync();
+            try
             {
-                try
-                {
-                    string json = await File.ReadAllTextAsync(_metadataFile);
-                    var documents = JsonSerializer.Deserialize<List<Document>>(json);
+                if (_isInitialized)
+                    return;
 
-                    if (documents != null)
+                if (File.Exists(_metadataFile))
+                {
+                    try
                     {
-                        foreach (var doc in documents)
+                        // Get file lock for reading
+                        var fileLock = GetFileLock(_metadataFile);
+                        await fileLock.WaitAsync();
+                        string json;
+
+                        try
                         {
-                            // We now always store full content
-                            _documentsCache[doc.Id] = doc;
+                            json = await File.ReadAllTextAsync(_metadataFile);
                         }
+                        finally
+                        {
+                            fileLock.Release();
+                        }
+
+                        var documents = JsonSerializer.Deserialize<List<Document>>(json);
+
+                        if (documents != null)
+                        {
+                            await _cacheLock.WaitAsync();
+                            try
+                            {
+                                _documentsCache.Clear();
+                                foreach (var doc in documents)
+                                {
+                                    // We now always store full content
+                                    _documentsCache[doc.Id] = doc;
+                                }
+                            }
+                            finally
+                            {
+                                _cacheLock.Release();
+                            }
+                        }
+
+                        _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
+                            $"Loaded {_documentsCache.Count} documents from metadata file");
                     }
+                    catch (Exception ex)
+                    {
+                        _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
+                            $"Error loading document metadata: {ex.Message}");
+                        // If we can't read the file, start with an empty cache
+                    }
+                }
 
-                    _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
-                        $"Loaded {_documentsCache.Count} documents from metadata file");
-                }
-                catch (Exception ex)
-                {
-                    _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
-                        $"Error loading document metadata: {ex.Message}");
-                    // If we can't read the file, start with an empty cache
-                }
+                _isInitialized = true;
             }
-
-            _isInitialized = true;
+            finally
+            {
+                _initializationLock.Release();
+            }
         }
 
         private async Task SaveMetadataAsync()
         {
             try
             {
-                // Clone documents for serialization
-                var documentsToSave = _documentsCache.Values.Select(doc =>
+                List<Document> documentsToSave;
+
+                await _cacheLock.WaitAsync();
+                try
                 {
-                    // Create a shallow copy
-                    var docCopy = new Document
+                    // Clone documents for serialization
+                    documentsToSave = _documentsCache.Values.Select(doc =>
                     {
-                        Id = doc.Id,
-                        Name = doc.Name,
-                        FilePath = doc.FilePath,
-                        DateAdded = doc.DateAdded,
-                        IsProcessed = doc.IsProcessed,
-                        IsSelected = doc.IsSelected,
-                        FileSize = doc.FileSize,
-                        DocumentType = doc.DocumentType
-                    };
+                        // Create a shallow copy
+                        var docCopy = new Document
+                        {
+                            Id = doc.Id,
+                            Name = doc.Name,
+                            FilePath = doc.FilePath,
+                            DateAdded = doc.DateAdded,
+                            IsProcessed = doc.IsProcessed,
+                            IsSelected = doc.IsSelected,
+                            FileSize = doc.FileSize,
+                            DocumentType = doc.DocumentType
+                        };
 
-                    // Always include content
-                    docCopy.Content = doc.Content;
+                        // Always include content
+                        docCopy.Content = doc.Content;
 
-                    return docCopy;
-                }).ToList();
+                        return docCopy;
+                    }).ToList();
+                }
+                finally
+                {
+                    _cacheLock.Release();
+                }
 
                 string json = JsonSerializer.Serialize(documentsToSave);
-                await File.WriteAllTextAsync(_metadataFile, json);
+
+                // Get file lock for writing
+                var fileLock = GetFileLock(_metadataFile);
+                await fileLock.WaitAsync();
+                try
+                {
+                    await File.WriteAllTextAsync(_metadataFile, json);
+                }
+                finally
+                {
+                    fileLock.Release();
+                }
 
                 _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
                     "Metadata saved successfully");
@@ -118,16 +186,33 @@ namespace ollamidesk.RAG.Services.Implementations
         public async Task<List<Document>> GetAllDocumentsAsync()
         {
             await EnsureInitializedAsync();
-            return _documentsCache.Values.ToList();
+
+            await _cacheLock.WaitAsync();
+            try
+            {
+                return _documentsCache.Values.ToList();
+            }
+            finally
+            {
+                _cacheLock.Release();
+            }
         }
 
         public async Task<Document> GetDocumentByIdAsync(string id)
         {
             await EnsureInitializedAsync();
 
-            if (_documentsCache.TryGetValue(id, out var document))
+            await _cacheLock.WaitAsync();
+            try
             {
-                return document;
+                if (_documentsCache.TryGetValue(id, out var document))
+                {
+                    return document;
+                }
+            }
+            finally
+            {
+                _cacheLock.Release();
             }
 
             _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
@@ -139,9 +224,25 @@ namespace ollamidesk.RAG.Services.Implementations
         {
             await EnsureInitializedAsync();
 
-            if (!_documentsCache.TryGetValue(documentId, out var document))
+            Document? document = null; // Fix: Make document nullable
+            await _cacheLock.WaitAsync();
+            try
             {
-                throw new KeyNotFoundException($"Document with ID {documentId} not found");
+                if (!_documentsCache.TryGetValue(documentId, out var docRef))
+                {
+                    throw new KeyNotFoundException($"Document with ID {documentId} not found");
+                }
+                document = docRef; // Assign to our nullable variable
+            }
+            finally
+            {
+                _cacheLock.Release();
+            }
+
+            // Check for null after lock is released
+            if (document == null)
+            {
+                throw new InvalidOperationException($"Document with ID {documentId} was unexpectedly null after retrieval");
             }
 
             try
@@ -161,7 +262,16 @@ namespace ollamidesk.RAG.Services.Implementations
                 // For text files, read the actual content
                 if (IsTextFile(Path.GetExtension(document.FilePath)))
                 {
-                    document.Content = await File.ReadAllTextAsync(document.FilePath);
+                    var fileLock = GetFileLock(document.FilePath);
+                    await fileLock.WaitAsync();
+                    try
+                    {
+                        document.Content = await File.ReadAllTextAsync(document.FilePath);
+                    }
+                    finally
+                    {
+                        fileLock.Release();
+                    }
 
                     _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
                         $"Loaded full content, length: {document.Content.Length} characters");
@@ -194,7 +304,22 @@ namespace ollamidesk.RAG.Services.Implementations
             if (!string.IsNullOrEmpty(document.Content))
             {
                 string documentPath = Path.Combine(_documentsFolder, $"{document.Id}.txt");
-                await File.WriteAllTextAsync(documentPath, document.Content);
+
+                // Ensure directory exists
+                string? directory = Path.GetDirectoryName(documentPath);
+                if (!string.IsNullOrEmpty(directory))
+                    Directory.CreateDirectory(directory);
+
+                var fileLock = GetFileLock(documentPath);
+                await fileLock.WaitAsync();
+                try
+                {
+                    await File.WriteAllTextAsync(documentPath, document.Content);
+                }
+                finally
+                {
+                    fileLock.Release();
+                }
 
                 _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
                     $"Saved document content to disk: {document.Id}, size: {document.Content.Length} chars");
@@ -205,14 +330,32 @@ namespace ollamidesk.RAG.Services.Implementations
             {
                 string embeddingsPath = Path.Combine(_embeddingsFolder, $"{document.Id}.json");
                 string embeddingsJson = JsonSerializer.Serialize(document.Chunks);
-                await File.WriteAllTextAsync(embeddingsPath, embeddingsJson);
+
+                var fileLock = GetFileLock(embeddingsPath);
+                await fileLock.WaitAsync();
+                try
+                {
+                    await File.WriteAllTextAsync(embeddingsPath, embeddingsJson);
+                }
+                finally
+                {
+                    fileLock.Release();
+                }
 
                 _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
                     $"Saved {document.Chunks.Count} chunks for document: {document.Id}");
             }
 
             // Update cache
-            _documentsCache[document.Id] = document;
+            await _cacheLock.WaitAsync();
+            try
+            {
+                _documentsCache[document.Id] = document;
+            }
+            finally
+            {
+                _cacheLock.Release();
+            }
 
             // Update metadata
             await SaveMetadataAsync();
@@ -225,23 +368,55 @@ namespace ollamidesk.RAG.Services.Implementations
         {
             await EnsureInitializedAsync();
 
-            if (_documentsCache.TryGetValue(id, out var document))
-            {
-                // Remove from cache
-                _documentsCache.Remove(id);
+            Document? document = null;
 
+            await _cacheLock.WaitAsync();
+            try
+            {
+                if (_documentsCache.TryGetValue(id, out var docRef))
+                {
+                    document = docRef;
+                    // Remove from cache
+                    _documentsCache.Remove(id);
+                }
+            }
+            finally
+            {
+                _cacheLock.Release();
+            }
+
+            if (document != null)
+            {
                 // Delete document file
                 string documentPath = Path.Combine(_documentsFolder, $"{document.Id}.txt");
                 if (File.Exists(documentPath))
                 {
-                    File.Delete(documentPath);
+                    var fileLock = GetFileLock(documentPath);
+                    await fileLock.WaitAsync();
+                    try
+                    {
+                        File.Delete(documentPath);
+                    }
+                    finally
+                    {
+                        fileLock.Release();
+                    }
                 }
 
                 // Delete embeddings file
                 string embeddingsPath = Path.Combine(_embeddingsFolder, $"{document.Id}.json");
                 if (File.Exists(embeddingsPath))
                 {
-                    File.Delete(embeddingsPath);
+                    var fileLock = GetFileLock(embeddingsPath);
+                    await fileLock.WaitAsync();
+                    try
+                    {
+                        File.Delete(embeddingsPath);
+                    }
+                    finally
+                    {
+                        fileLock.Release();
+                    }
                 }
 
                 // Update metadata
@@ -261,16 +436,24 @@ namespace ollamidesk.RAG.Services.Implementations
         {
             await EnsureInitializedAsync();
 
-            foreach (var document in _documentsCache.Values)
+            await _cacheLock.WaitAsync();
+            try
             {
-                if (document.Chunks != null)
+                foreach (var document in _documentsCache.Values)
                 {
-                    var chunk = document.Chunks.FirstOrDefault(c => c.Id == chunkId);
-                    if (chunk != null)
+                    if (document.Chunks != null)
                     {
-                        return chunk;
+                        var chunk = document.Chunks.FirstOrDefault(c => c.Id == chunkId);
+                        if (chunk != null)
+                        {
+                            return chunk;
+                        }
                     }
                 }
+            }
+            finally
+            {
+                _cacheLock.Release();
             }
 
             _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
@@ -288,6 +471,20 @@ namespace ollamidesk.RAG.Services.Implementations
             };
 
             return textExtensions.Contains(extension.ToLowerInvariant());
+        }
+
+        // Cleanup resources
+        public void Dispose()
+        {
+            _initializationLock?.Dispose();
+            _cacheLock?.Dispose();
+
+            // Dispose all file locks
+            foreach (var fileLock in _fileSpecificLocks.Values)
+            {
+                fileLock?.Dispose();
+            }
+            _fileSpecificLocks.Clear();
         }
     }
 }

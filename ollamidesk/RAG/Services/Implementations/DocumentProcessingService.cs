@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
@@ -22,6 +23,10 @@ namespace ollamidesk.RAG.Services.Implementations
         private readonly RagDiagnosticsService _diagnostics;
         private readonly IRagConfigurationService _configService;
         private readonly int _embeddingBatchSize = 15; // Default batch size for embedding generation
+
+        // Add semaphore for controlling parallel processing
+        private readonly SemaphoreSlim _processingLock = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _embeddingSemaphore = new SemaphoreSlim(5, 5); // Allow 5 concurrent embedding generations
 
         public DocumentProcessingService(
             IDocumentRepository documentRepository,
@@ -49,10 +54,13 @@ namespace ollamidesk.RAG.Services.Implementations
 
         public async Task<Document> ProcessDocumentAsync(Document document)
         {
-            _diagnostics.StartOperation("ProcessDocument");
+            // Use the semaphore to ensure only one document is processed at a time
+            await _processingLock.WaitAsync();
 
             try
             {
+                _diagnostics.StartOperation("ProcessDocument");
+
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
                     $"Processing document: {document.Id}");
 
@@ -182,13 +190,17 @@ namespace ollamidesk.RAG.Services.Implementations
             }
             finally
             {
+                _processingLock.Release();
                 _diagnostics.EndOperation("ProcessDocument");
             }
         }
 
-        // Helper method for processing a single chunk's embedding
+        // Helper method for processing a single chunk's embedding with proper synchronization
         private async Task ProcessChunkEmbeddingAsync(DocumentChunk chunk)
         {
+            // Wait for a slot in the semaphore before processing this chunk
+            await _embeddingSemaphore.WaitAsync();
+
             try
             {
                 chunk.Embedding = await _embeddingService.GenerateEmbeddingAsync(chunk.Content);
@@ -198,6 +210,11 @@ namespace ollamidesk.RAG.Services.Implementations
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService",
                     $"Failed to generate embedding for chunk {chunk.Id}: {ex.Message}");
                 chunk.Embedding = new float[0]; // Empty embedding
+            }
+            finally
+            {
+                // Release the semaphore when done
+                _embeddingSemaphore.Release();
             }
         }
 

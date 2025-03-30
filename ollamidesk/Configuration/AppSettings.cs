@@ -26,6 +26,9 @@ namespace ollamidesk.Configuration
         public int MaxRetries { get; set; } = 3;
         public int RetryDelayMs { get; set; } = 1000;
 
+        // New property for concurrent request limiting
+        public int MaxConcurrentRequests { get; set; } = 3;
+
         public string ApiGenerateEndpoint => $"{ApiBaseUrl}/api/generate";
         public string ApiEmbeddingsEndpoint => $"{ApiBaseUrl}/api/embeddings";
 

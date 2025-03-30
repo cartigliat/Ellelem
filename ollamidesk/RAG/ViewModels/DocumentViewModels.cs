@@ -80,20 +80,16 @@ namespace ollamidesk.RAG.ViewModels
 
                 var documents = await _documentManagementService.GetAllDocumentsAsync();
 
-                // Update collection on UI thread using CollectionHelper
-                CollectionHelper.ClearSafely(Documents);
+                // Create view models for each document
+                var documentViewModels = documents.Select(doc => new DocumentItemViewModel(
+                        doc,
+                        _documentManagementService,
+                        _documentProcessingService,
+                        _diagnostics,
+                        _documentRepository)).ToList();
 
-                foreach (var doc in documents)
-                {
-                    // Add documents one by one on UI thread
-                    CollectionHelper.AddSafely(Documents,
-                        new DocumentItemViewModel(
-                            doc,
-                            _documentManagementService,
-                            _documentProcessingService,
-                            _diagnostics,
-                            _documentRepository));
-                }
+                // Update collection in a single atomic operation
+                CollectionHelper.BatchUpdateSafely(Documents, documentViewModels, true);
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
                     $"Loaded {documents.Count} documents");
@@ -103,7 +99,7 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
                     $"Error loading documents: {ex.Message}");
 
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                CollectionHelper.ExecuteOnUIThread(() =>
                 {
                     MessageBox.Show($"Error loading documents: {ex.Message}", "Error",
                         MessageBoxButton.OK, MessageBoxImage.Error);
@@ -149,14 +145,16 @@ namespace ollamidesk.RAG.ViewModels
 
                         var document = await _documentManagementService.AddDocumentAsync(openFileDialog.FileName);
 
-                        // Add new document to collection on UI thread
-                        CollectionHelper.AddSafely(Documents,
-                            new DocumentItemViewModel(
-                                document,
-                                _documentManagementService,
-                                _documentProcessingService,
-                                _diagnostics,
-                                _documentRepository));
+                        // Create a new document view model
+                        var documentViewModel = new DocumentItemViewModel(
+                            document,
+                            _documentManagementService,
+                            _documentProcessingService,
+                            _diagnostics,
+                            _documentRepository);
+
+                        // Add document to collection as a single atomic operation
+                        CollectionHelper.AddSafely(Documents, documentViewModel);
 
                         _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
                             $"Document added successfully: {document.Id}");
@@ -166,7 +164,7 @@ namespace ollamidesk.RAG.ViewModels
                         _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
                             $"Error adding document: {ex.Message}");
 
-                        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                        CollectionHelper.ExecuteOnUIThread(() =>
                         {
                             MessageBox.Show($"Error adding document: {ex.Message}", "Error",
                                 MessageBoxButton.OK, MessageBoxImage.Error);
@@ -238,7 +236,7 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
                     $"Error generating augmented prompt: {ex.Message}");
 
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                CollectionHelper.ExecuteOnUIThread(() =>
                 {
                     MessageBox.Show($"Error generating augmented prompt: {ex.Message}", "Error",
                         MessageBoxButton.OK, MessageBoxImage.Error);
@@ -281,23 +279,8 @@ namespace ollamidesk.RAG.ViewModels
                 if (SetProperty(ref _isSelected, value))
                 {
                     _document.IsSelected = value;
-                    // Save the document when selection changes
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await _documentManagementService.UpdateDocumentSelectionAsync(Id, value);
-
-                            _diagnostics.Log(DiagnosticLevel.Debug, "DocumentItemViewModel",
-                                $"Updated selection state for document {Id} to {value}");
-                        }
-                        catch (Exception ex)
-                        {
-                            // Log but don't block the UI
-                            _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
-                                $"Error updating document selection: {ex.Message}");
-                        }
-                    });
+                    // Use the FireAndForget extension method for background tasks
+                    UpdateSelectionAsync(value).FireAndForget(_diagnostics, "DocumentItemViewModel");
                 }
             }
         }
@@ -344,6 +327,21 @@ namespace ollamidesk.RAG.ViewModels
                 _ => !IsProcessing);
         }
 
+        private async Task UpdateSelectionAsync(bool isSelected)
+        {
+            try
+            {
+                await _documentManagementService.UpdateDocumentSelectionAsync(Id, isSelected);
+                _diagnostics.Log(DiagnosticLevel.Debug, "DocumentItemViewModel",
+                    $"Updated selection state for document {Id} to {isSelected}");
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
+                    $"Error updating document selection: {ex.Message}");
+            }
+        }
+
         private async Task ProcessDocumentAsync()
         {
             try
@@ -372,7 +370,7 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
                     $"Error processing document: {ex.Message}");
 
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                CollectionHelper.ExecuteOnUIThread(() =>
                 {
                     MessageBox.Show($"Error processing document: {ex.Message}", "Error",
                         MessageBoxButton.OK, MessageBoxImage.Error);
@@ -421,7 +419,7 @@ namespace ollamidesk.RAG.ViewModels
                     _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
                         $"Error deleting document: {ex.Message}");
 
-                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                    CollectionHelper.ExecuteOnUIThread(() =>
                     {
                         MessageBox.Show($"Error deleting document: {ex.Message}", "Error",
                             MessageBoxButton.OK, MessageBoxImage.Error);

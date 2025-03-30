@@ -31,6 +31,9 @@ namespace ollamidesk.RAG.ViewModels
         private readonly Dictionary<string, ObservableCollection<ChatMessage>> _modelChatHistories =
             new Dictionary<string, ObservableCollection<ChatMessage>>();
 
+        // Lock object for dictionary access synchronization
+        private readonly object _chatHistoriesLock = new object();
+
         // Maximum number of messages to keep in history
         private const int MaxChatHistoryMessages = 50;
 
@@ -94,10 +97,16 @@ namespace ollamidesk.RAG.ViewModels
             // Get diagnostics command from service
             DiagnosticsCommand = _diagnosticsUIService.GetShowDiagnosticsCommand();
 
-            // Initialize the chat history for the default model
-            if (!string.IsNullOrEmpty(ModelName) && !_modelChatHistories.ContainsKey(ModelName))
+            // Initialize the chat history for the default model in a thread-safe way
+            if (!string.IsNullOrEmpty(ModelName))
             {
-                _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>();
+                lock (_chatHistoriesLock)
+                {
+                    if (!_modelChatHistories.ContainsKey(ModelName))
+                    {
+                        _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>();
+                    }
+                }
             }
 
             _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel", "ViewModel initialized");
@@ -132,8 +141,12 @@ namespace ollamidesk.RAG.ViewModels
             if (string.IsNullOrEmpty(modelName))
                 return;
 
-            // Create a new collection with the current chat history
-            _modelChatHistories[modelName] = new ObservableCollection<ChatMessage>(ChatHistory);
+            // Thread-safe dictionary update
+            lock (_chatHistoriesLock)
+            {
+                // Create a new collection with the current chat history
+                _modelChatHistories[modelName] = new ObservableCollection<ChatMessage>(ChatHistory);
+            }
 
             _diagnostics.Log(DiagnosticLevel.Debug, "MainViewModel",
                 $"Saved chat history for model {modelName} ({ChatHistory.Count} messages)");
@@ -147,24 +160,28 @@ namespace ollamidesk.RAG.ViewModels
             if (string.IsNullOrEmpty(modelName))
                 return;
 
-            // Initialize history for this model if it doesn't exist
-            if (!_modelChatHistories.ContainsKey(modelName))
+            ObservableCollection<ChatMessage> historyToLoad;
+
+            // Thread-safe dictionary access
+            lock (_chatHistoriesLock)
             {
-                _modelChatHistories[modelName] = new ObservableCollection<ChatMessage>();
-                _diagnostics.Log(DiagnosticLevel.Debug, "MainViewModel",
-                    $"Created new chat history for model {modelName}");
+                // Initialize history for this model if it doesn't exist
+                if (!_modelChatHistories.ContainsKey(modelName))
+                {
+                    _modelChatHistories[modelName] = new ObservableCollection<ChatMessage>();
+                    _diagnostics.Log(DiagnosticLevel.Debug, "MainViewModel",
+                        $"Created new chat history for model {modelName}");
+                }
+
+                // Get a local copy to avoid holding the lock while updating the UI
+                historyToLoad = new ObservableCollection<ChatMessage>(_modelChatHistories[modelName]);
             }
 
             // Apply updates on the UI thread
-            CollectionHelper.ClearSafely(ChatHistory);
-
-            foreach (var message in _modelChatHistories[modelName])
-            {
-                CollectionHelper.AddSafely(ChatHistory, message);
-            }
+            CollectionHelper.ReplaceSafely(ChatHistory, historyToLoad);
 
             _diagnostics.Log(DiagnosticLevel.Debug, "MainViewModel",
-                $"Loaded chat history for model {modelName} ({_modelChatHistories[modelName].Count} messages)");
+                $"Loaded chat history for model {modelName} ({historyToLoad.Count} messages)");
         }
 
         /// <summary>
@@ -175,7 +192,7 @@ namespace ollamidesk.RAG.ViewModels
             if (message == null)
                 throw new ArgumentNullException(nameof(message));
 
-            // Manage maximum history size
+            // Manage maximum history size on the UI thread
             if (ChatHistory.Count >= MaxChatHistoryMessages)
             {
                 CollectionHelper.RemoveAtSafely(ChatHistory, 0);
@@ -186,13 +203,17 @@ namespace ollamidesk.RAG.ViewModels
             // Update the model-specific history in our dictionary
             if (!string.IsNullOrEmpty(ModelName))
             {
-                if (!_modelChatHistories.ContainsKey(ModelName))
+                // Thread-safe dictionary update
+                lock (_chatHistoriesLock)
                 {
-                    _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>();
-                }
+                    if (!_modelChatHistories.ContainsKey(ModelName))
+                    {
+                        _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>();
+                    }
 
-                // Make a copy of the current UI-bound collection
-                _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>(ChatHistory);
+                    // Make a copy of the current UI-bound collection
+                    _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>(ChatHistory);
+                }
             }
 
             _diagnostics.Log(DiagnosticLevel.Debug, "MainViewModel",
@@ -304,7 +325,7 @@ namespace ollamidesk.RAG.ViewModels
                     $"Error sending message: {ex.Message}");
 
                 // Use properly awaited async call by capturing the task or using discard
-                _ = Application.Current.Dispatcher.InvokeAsync(() =>
+                CollectionHelper.ExecuteOnUIThread(() =>
                 {
                     MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 });
@@ -322,11 +343,16 @@ namespace ollamidesk.RAG.ViewModels
         public void ClearAllChatHistory()
         {
             CollectionHelper.ClearSafely(ChatHistory);
-            _modelChatHistories.Clear();
 
-            if (!string.IsNullOrEmpty(ModelName))
+            // Thread-safe dictionary clearing
+            lock (_chatHistoriesLock)
             {
-                _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>();
+                _modelChatHistories.Clear();
+
+                if (!string.IsNullOrEmpty(ModelName))
+                {
+                    _modelChatHistories[ModelName] = new ObservableCollection<ChatMessage>();
+                }
             }
 
             _diagnostics.Log(DiagnosticLevel.Info, "MainViewModel", "Cleared all chat history");
