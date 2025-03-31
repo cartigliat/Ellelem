@@ -15,7 +15,7 @@ namespace ollamidesk.RAG.Services.Implementations
     /// <summary>
     /// Implementation of the document processing service
     /// </summary>
-    public class DocumentProcessingService : IDocumentProcessingService
+    public class DocumentProcessingService : IDocumentProcessingService, IDisposable
     {
         private readonly IDocumentRepository _documentRepository;
         private readonly IEmbeddingService _embeddingService;
@@ -27,6 +27,7 @@ namespace ollamidesk.RAG.Services.Implementations
         // Add semaphore for controlling parallel processing
         private readonly SemaphoreSlim _processingLock = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _embeddingSemaphore = new SemaphoreSlim(5, 5); // Allow 5 concurrent embedding generations
+        private bool _disposedValue;
 
         public DocumentProcessingService(
             IDocumentRepository documentRepository,
@@ -54,11 +55,14 @@ namespace ollamidesk.RAG.Services.Implementations
 
         public async Task<Document> ProcessDocumentAsync(Document document)
         {
-            // Use the semaphore to ensure only one document is processed at a time
-            await _processingLock.WaitAsync();
+            bool lockAcquired = false;
 
             try
             {
+                // Use the semaphore to ensure only one document is processed at a time
+                await _processingLock.WaitAsync().ConfigureAwait(false);
+                lockAcquired = true;
+
                 _diagnostics.StartOperation("ProcessDocument");
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
@@ -71,7 +75,7 @@ namespace ollamidesk.RAG.Services.Implementations
 
                 // Create chunks
                 _diagnostics.StartOperation("DocumentChunking");
-                document.Chunks = await ChunkDocumentAsync(document);
+                document.Chunks = await ChunkDocumentAsync(document).ConfigureAwait(false);
                 _diagnostics.EndOperation("DocumentChunking");
 
                 _diagnostics.LogDocumentChunking("DocumentProcessingService", document.Id, document.Chunks);
@@ -142,7 +146,7 @@ namespace ollamidesk.RAG.Services.Implementations
                     try
                     {
                         // Wait for all tasks in this batch to complete
-                        await Task.WhenAll(tasks);
+                        await Task.WhenAll(tasks).ConfigureAwait(false);
 
                         processedChunks += batch.Count;
                         _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
@@ -170,11 +174,11 @@ namespace ollamidesk.RAG.Services.Implementations
                 document.IsSelected = true; // Auto-select document after processing
 
                 // Save updated document
-                await _documentRepository.SaveDocumentAsync(document);
+                await _documentRepository.SaveDocumentAsync(document).ConfigureAwait(false);
 
                 // Add vectors to store
                 _diagnostics.StartOperation("AddVectorsToStore");
-                await _vectorStore.AddVectorsAsync(document.Chunks);
+                await _vectorStore.AddVectorsAsync(document.Chunks).ConfigureAwait(false);
                 _diagnostics.EndOperation("AddVectorsToStore");
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
@@ -190,7 +194,11 @@ namespace ollamidesk.RAG.Services.Implementations
             }
             finally
             {
-                _processingLock.Release();
+                if (lockAcquired)
+                {
+                    _processingLock.Release();
+                }
+
                 _diagnostics.EndOperation("ProcessDocument");
             }
         }
@@ -198,12 +206,15 @@ namespace ollamidesk.RAG.Services.Implementations
         // Helper method for processing a single chunk's embedding with proper synchronization
         private async Task ProcessChunkEmbeddingAsync(DocumentChunk chunk)
         {
-            // Wait for a slot in the semaphore before processing this chunk
-            await _embeddingSemaphore.WaitAsync();
+            bool semaphoreAcquired = false;
 
             try
             {
-                chunk.Embedding = await _embeddingService.GenerateEmbeddingAsync(chunk.Content);
+                // Wait for a slot in the semaphore before processing this chunk
+                await _embeddingSemaphore.WaitAsync().ConfigureAwait(false);
+                semaphoreAcquired = true;
+
+                chunk.Embedding = await _embeddingService.GenerateEmbeddingAsync(chunk.Content).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -214,7 +225,10 @@ namespace ollamidesk.RAG.Services.Implementations
             finally
             {
                 // Release the semaphore when done
-                _embeddingSemaphore.Release();
+                if (semaphoreAcquired)
+                {
+                    _embeddingSemaphore.Release();
+                }
             }
         }
 
@@ -502,5 +516,28 @@ namespace ollamidesk.RAG.Services.Implementations
 
             return chunks;
         }
+
+        #region IDisposable
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposedValue)
+            {
+                if (disposing)
+                {
+                    // Dispose managed resources
+                    _processingLock?.Dispose();
+                    _embeddingSemaphore?.Dispose();
+                }
+
+                _disposedValue = true;
+            }
+        }
+
+        public void Dispose()
+        {
+            Dispose(disposing: true);
+            GC.SuppressFinalize(this);
+        }
+        #endregion
     }
 }

@@ -1,3 +1,4 @@
+// Modified OllamaModel.cs with improved async patterns
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
@@ -99,7 +100,7 @@ namespace ollamidesk
                 // Serialize to JSON
                 string jsonContent = JsonSerializer.Serialize(requestData);
 
-                return await SendRequestToOllamaAsync(jsonContent);
+                return await SendRequestToOllamaAsync(jsonContent).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -166,7 +167,7 @@ namespace ollamidesk
                 // Serialize to JSON
                 string jsonContent = JsonSerializer.Serialize(requestData);
 
-                return await SendRequestToOllamaAsync(jsonContent);
+                return await SendRequestToOllamaAsync(jsonContent).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -184,100 +185,97 @@ namespace ollamidesk
         {
             _diagnostics.StartOperation("OllamaApiRequest");
 
+            // Flag to track if we've acquired the semaphore
+            bool semaphoreAcquired = false;
+
             try
             {
                 // Throttle concurrent requests using the semaphore
-                await _requestSemaphore.WaitAsync();
-                try
+                await _requestSemaphore.WaitAsync().ConfigureAwait(false);
+                semaphoreAcquired = true;
+
+                var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+                _diagnostics.LogApiRequest("OllamaModel", _apiUrl,
+                    jsonContent.Length > 500 ? jsonContent.Substring(0, 500) + "..." : jsonContent);
+
+                for (int attempt = 1; attempt <= _maxRetries; attempt++)
                 {
-                    var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-                    _diagnostics.LogApiRequest("OllamaModel", _apiUrl,
-                        jsonContent.Length > 500 ? jsonContent.Substring(0, 500) + "..." : jsonContent);
-
-                    for (int attempt = 1; attempt <= _maxRetries; attempt++)
+                    try
                     {
-                        try
+                        // Send request to the Ollama API
+                        var response = await _httpClient.PostAsync(_apiUrl, content).ConfigureAwait(false);
+
+                        // Check if the request was successful
+                        if (response.IsSuccessStatusCode)
                         {
-                            // Send request to the Ollama API
-                            var response = await _httpClient.PostAsync(_apiUrl, content);
+                            // Read and parse JSON response
+                            string jsonResponse = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                            _diagnostics.LogApiResponse("OllamaModel", _apiUrl,
+                                jsonResponse.Length > 500 ? jsonResponse.Substring(0, 500) + "..." : jsonResponse,
+                                true);
 
-                            // Check if the request was successful
-                            if (response.IsSuccessStatusCode)
+                            try
                             {
-                                // Read and parse JSON response
-                                string jsonResponse = await response.Content.ReadAsStringAsync();
-                                _diagnostics.LogApiResponse("OllamaModel", _apiUrl,
-                                    jsonResponse.Length > 500 ? jsonResponse.Substring(0, 500) + "..." : jsonResponse,
-                                    true);
-
-                                try
+                                using var doc = JsonDocument.Parse(jsonResponse);
+                                // Extract just the response text from the JSON
+                                if (doc.RootElement.TryGetProperty("response", out var responseElement))
                                 {
-                                    using var doc = JsonDocument.Parse(jsonResponse);
-                                    // Extract just the response text from the JSON
-                                    if (doc.RootElement.TryGetProperty("response", out var responseElement))
-                                    {
-                                        string responseText = responseElement.GetString() ?? "No response received";
-                                        _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
-                                            $"Response generated successfully (length: {responseText.Length} chars)");
-                                        return responseText;
-                                    }
-                                    else
-                                    {
-                                        _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
-                                            "Unexpected API response format - no 'response' field");
-                                        return "Error: Unexpected API response format";
-                                    }
+                                    string responseText = responseElement.GetString() ?? "No response received";
+                                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
+                                        $"Response generated successfully (length: {responseText.Length} chars)");
+                                    return responseText;
                                 }
-                                catch (JsonException ex)
+                                else
                                 {
                                     _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
-                                        $"Invalid JSON response: {ex.Message}");
-                                    return "Error: Invalid JSON response from Ollama API";
+                                        "Unexpected API response format - no 'response' field");
+                                    return "Error: Unexpected API response format";
                                 }
                             }
-                            else
+                            catch (JsonException ex)
                             {
-                                string errorContent = await response.Content.ReadAsStringAsync();
-                                _diagnostics.LogApiResponse("OllamaModel", _apiUrl, errorContent, false);
-
-                                // Only retry for server errors (5xx)
-                                if ((int)response.StatusCode >= 500 && attempt < _maxRetries)
-                                {
-                                    _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
-                                        $"Server error on attempt {attempt}, will retry after delay: {response.StatusCode}");
-                                    await Task.Delay(_retryDelayMs * attempt);
-                                    continue;
-                                }
-
-                                return $"Error: API request failed with status {response.StatusCode}";
+                                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
+                                    $"Invalid JSON response: {ex.Message}");
+                                return "Error: Invalid JSON response from Ollama API";
                             }
                         }
-                        catch (TaskCanceledException)
+                        else
                         {
-                            if (attempt < _maxRetries)
+                            string errorContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                            _diagnostics.LogApiResponse("OllamaModel", _apiUrl, errorContent, false);
+
+                            // Only retry for server errors (5xx)
+                            if ((int)response.StatusCode >= 500 && attempt < _maxRetries)
                             {
                                 _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
-                                    $"Request timeout on attempt {attempt}, will retry");
-                                await Task.Delay(_retryDelayMs * attempt);
+                                    $"Server error on attempt {attempt}, will retry after delay: {response.StatusCode}");
+                                await Task.Delay(_retryDelayMs * attempt).ConfigureAwait(false);
                                 continue;
                             }
-                            return "Error: Request to Ollama API timed out after multiple attempts";
-                        }
-                        catch (Exception ex) when (attempt < _maxRetries)
-                        {
-                            _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
-                                $"Error on attempt {attempt}, will retry: {ex.Message}");
-                            await Task.Delay(_retryDelayMs * attempt);
+
+                            return $"Error: API request failed with status {response.StatusCode}";
                         }
                     }
+                    catch (TaskCanceledException)
+                    {
+                        if (attempt < _maxRetries)
+                        {
+                            _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
+                                $"Request timeout on attempt {attempt}, will retry");
+                            await Task.Delay(_retryDelayMs * attempt).ConfigureAwait(false);
+                            continue;
+                        }
+                        return "Error: Request to Ollama API timed out after multiple attempts";
+                    }
+                    catch (Exception ex) when (attempt < _maxRetries)
+                    {
+                        _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
+                            $"Error on attempt {attempt}, will retry: {ex.Message}");
+                        await Task.Delay(_retryDelayMs * attempt).ConfigureAwait(false);
+                    }
+                }
 
-                    return "Error: Failed to get a response from Ollama API after multiple attempts";
-                }
-                finally
-                {
-                    // Release the semaphore when done with this request
-                    _requestSemaphore.Release();
-                }
+                return "Error: Failed to get a response from Ollama API after multiple attempts";
             }
             catch (Exception ex)
             {
@@ -287,6 +285,12 @@ namespace ollamidesk
             }
             finally
             {
+                // Release the semaphore only if we acquired it
+                if (semaphoreAcquired)
+                {
+                    _requestSemaphore.Release();
+                }
+
                 _diagnostics.EndOperation("OllamaApiRequest");
             }
         }
@@ -296,37 +300,35 @@ namespace ollamidesk
         {
             _diagnostics.StartOperation("TestModelConnection");
 
+            // Flag to track if we've acquired the semaphore
+            bool semaphoreAcquired = false;
+
             try
             {
                 // Use the semaphore for throttling connection tests too
-                await _requestSemaphore.WaitAsync();
-                try
+                await _requestSemaphore.WaitAsync().ConfigureAwait(false);
+                semaphoreAcquired = true;
+
+                // Create a simple request to test connection
+                var requestData = new
                 {
-                    // Create a simple request to test connection
-                    var requestData = new
-                    {
-                        model = _modelName,
-                        prompt = "Hello",
-                        system = "Respond with 'Connected'",
-                        options = new { num_predict = 10 }, // Request a very short response
-                        stream = false
-                    };
+                    model = _modelName,
+                    prompt = "Hello",
+                    system = "Respond with 'Connected'",
+                    options = new { num_predict = 10 }, // Request a very short response
+                    stream = false
+                };
 
-                    string jsonContent = JsonSerializer.Serialize(requestData);
-                    var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+                string jsonContent = JsonSerializer.Serialize(requestData);
+                var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-                    var response = await _httpClient.PostAsync(_apiUrl, content);
+                var response = await _httpClient.PostAsync(_apiUrl, content).ConfigureAwait(false);
 
-                    bool success = response.IsSuccessStatusCode;
-                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
-                        $"Connection test result: {(success ? "SUCCESS" : "FAILED")} - Status: {response.StatusCode}");
+                bool success = response.IsSuccessStatusCode;
+                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
+                    $"Connection test result: {(success ? "SUCCESS" : "FAILED")} - Status: {response.StatusCode}");
 
-                    return success;
-                }
-                finally
-                {
-                    _requestSemaphore.Release();
-                }
+                return success;
             }
             catch (Exception ex)
             {
@@ -336,6 +338,12 @@ namespace ollamidesk
             }
             finally
             {
+                // Release the semaphore only if we acquired it
+                if (semaphoreAcquired)
+                {
+                    _requestSemaphore.Release();
+                }
+
                 _diagnostics.EndOperation("TestModelConnection");
             }
         }

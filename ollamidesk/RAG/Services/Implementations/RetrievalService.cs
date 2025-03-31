@@ -65,7 +65,7 @@ namespace ollamidesk.RAG.Services.Implementations
 
                 // Generate embedding for query
                 _diagnostics.StartOperation("QueryEmbeddingGeneration");
-                var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(query);
+                var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(query).ConfigureAwait(false);
                 _diagnostics.EndOperation("QueryEmbeddingGeneration");
 
                 // Use document-first search approach
@@ -73,7 +73,7 @@ namespace ollamidesk.RAG.Services.Implementations
                 var searchResults = await _vectorStore.SearchInDocumentsAsync(
                     queryEmbedding,
                     documentIds,
-                    effectiveMaxResults * 2); // Get more than needed
+                    effectiveMaxResults * 2).ConfigureAwait(false); // Get more than needed
                 _diagnostics.EndOperation("VectorSearch");
 
                 // Filter by minimum similarity score
@@ -116,14 +116,14 @@ namespace ollamidesk.RAG.Services.Implementations
                 _diagnostics.StartOperation("CalculateRelevanceScore");
 
                 // Generate query embedding
-                var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(query);
+                var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(query).ConfigureAwait(false);
 
                 // If chunk doesn't have embedding, generate it
                 if (chunk.Embedding == null || chunk.Embedding.Length == 0)
                 {
                     _diagnostics.Log(DiagnosticLevel.Warning, "RetrievalService",
                         $"Chunk {chunk.Id} doesn't have embedding, generating it now");
-                    chunk.Embedding = await _embeddingService.GenerateEmbeddingAsync(chunk.Content);
+                    chunk.Embedding = await _embeddingService.GenerateEmbeddingAsync(chunk.Content).ConfigureAwait(false);
                 }
 
                 // Calculate cosine similarity

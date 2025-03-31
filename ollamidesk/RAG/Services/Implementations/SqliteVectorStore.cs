@@ -57,9 +57,12 @@ namespace ollamidesk.RAG.Services
             if (_isInitialized)
                 return;
 
-            await _connectionSemaphore.WaitAsync();
+            bool semaphoreAcquired = false;
             try
             {
+                await _connectionSemaphore.WaitAsync().ConfigureAwait(false);
+                semaphoreAcquired = true;
+
                 if (_isInitialized)
                     return;
 
@@ -68,7 +71,7 @@ namespace ollamidesk.RAG.Services
 
                 // Create the connection
                 _connection = new SQLiteConnection(connectionString);
-                await _connection.OpenAsync();
+                await _connection.OpenAsync().ConfigureAwait(false);
 
                 // Create tables if they don't exist
                 using (var command = _connection.CreateCommand())
@@ -79,7 +82,7 @@ namespace ollamidesk.RAG.Services
                             DocumentId TEXT PRIMARY KEY,
                             Name TEXT NOT NULL
                         )";
-                    await command.ExecuteNonQueryAsync();
+                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
 
                     // Chunks table with vector storage
                     command.CommandText = @"
@@ -92,21 +95,21 @@ namespace ollamidesk.RAG.Services
                             VectorJson TEXT NOT NULL,
                             FOREIGN KEY (DocumentId) REFERENCES Documents(DocumentId) ON DELETE CASCADE
                         )";
-                    await command.ExecuteNonQueryAsync();
+                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
 
                     // Enable foreign keys
                     command.CommandText = "PRAGMA foreign_keys = ON";
-                    await command.ExecuteNonQueryAsync();
+                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
 
                     // Create index on DocumentId for faster lookups
                     command.CommandText = "CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON Chunks(DocumentId)";
-                    await command.ExecuteNonQueryAsync();
+                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
                 }
 
                 _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore", "Database initialized successfully");
 
                 // Check if we need to migrate data from file-based storage
-                await MigrateFromFileStorageIfNeededAsync();
+                await MigrateFromFileStorageIfNeededAsync().ConfigureAwait(false);
 
                 _isInitialized = true;
             }
@@ -118,7 +121,10 @@ namespace ollamidesk.RAG.Services
             }
             finally
             {
-                _connectionSemaphore.Release();
+                if (semaphoreAcquired)
+                {
+                    _connectionSemaphore.Release();
+                }
             }
         }
 
@@ -144,7 +150,7 @@ namespace ollamidesk.RAG.Services
                     using (var command = _connection.CreateCommand())
                     {
                         command.CommandText = "SELECT COUNT(*) FROM Chunks";
-                        int count = Convert.ToInt32(await command.ExecuteScalarAsync());
+                        int count = Convert.ToInt32(await command.ExecuteScalarAsync().ConfigureAwait(false));
 
                         if (count > 0)
                         {
@@ -168,7 +174,7 @@ namespace ollamidesk.RAG.Services
                 {
                     try
                     {
-                        string json = await File.ReadAllTextAsync(file);
+                        string json = await File.ReadAllTextAsync(file).ConfigureAwait(false);
                         var chunks = JsonSerializer.Deserialize<List<DocumentChunk>>(json);
 
                         if (chunks == null || chunks.Count == 0)
@@ -185,11 +191,11 @@ namespace ollamidesk.RAG.Services
                                 VALUES (@DocumentId, @Name)";
                             command.Parameters.AddWithValue("@DocumentId", documentId);
                             command.Parameters.AddWithValue("@Name", Path.GetFileNameWithoutExtension(file));
-                            await command.ExecuteNonQueryAsync();
+                            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
                         }
 
                         // Add chunks
-                        await AddVectorsInternalAsync(chunks);
+                        await AddVectorsInternalAsync(chunks).ConfigureAwait(false);
 
                         _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
                             $"Migrated {chunks.Count} vectors from file: {Path.GetFileName(file)}");
@@ -216,7 +222,7 @@ namespace ollamidesk.RAG.Services
             if (chunks == null || chunks.Count == 0)
                 return;
 
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
             _diagnostics.StartOperation("AddVectors");
 
             try
@@ -228,11 +234,14 @@ namespace ollamidesk.RAG.Services
                 {
                     string documentId = group.Key;
                     var documentLock = GetDocumentLock(documentId);
+                    bool lockAcquired = false;
 
                     // Acquire lock for this specific document
-                    await documentLock.WaitAsync();
                     try
                     {
+                        await documentLock.WaitAsync().ConfigureAwait(false);
+                        lockAcquired = true;
+
                         // Add or update document entry
                         if (_connection != null)
                         {
@@ -243,16 +252,19 @@ namespace ollamidesk.RAG.Services
                                     VALUES (@DocumentId, @Name)";
                                 command.Parameters.AddWithValue("@DocumentId", documentId);
                                 command.Parameters.AddWithValue("@Name", group.First().Source);
-                                await command.ExecuteNonQueryAsync();
+                                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
                             }
                         }
 
                         // Add chunks
-                        await AddVectorsInternalAsync(group.ToList());
+                        await AddVectorsInternalAsync(group.ToList()).ConfigureAwait(false);
                     }
                     finally
                     {
-                        documentLock.Release();
+                        if (lockAcquired)
+                        {
+                            documentLock.Release();
+                        }
                     }
                 }
 
@@ -282,7 +294,7 @@ namespace ollamidesk.RAG.Services
             {
                 command.CommandText = "DELETE FROM Chunks WHERE DocumentId = @DocumentId";
                 command.Parameters.AddWithValue("@DocumentId", documentId);
-                await command.ExecuteNonQueryAsync();
+                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
             // Use a transaction for better performance
@@ -336,7 +348,7 @@ namespace ollamidesk.RAG.Services
                             pSource.Value = chunk.Source;
                             pVectorJson.Value = vectorJson;
 
-                            await command.ExecuteNonQueryAsync();
+                            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
                         }
                     }
 
@@ -355,7 +367,7 @@ namespace ollamidesk.RAG.Services
             if (string.IsNullOrEmpty(documentId))
                 return;
 
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
             _diagnostics.StartOperation("RemoveVectors");
 
             try
@@ -369,16 +381,20 @@ namespace ollamidesk.RAG.Services
 
                 // Acquire document-specific lock
                 var documentLock = GetDocumentLock(documentId);
-                await documentLock.WaitAsync();
+                bool lockAcquired = false;
+
                 try
                 {
+                    await documentLock.WaitAsync().ConfigureAwait(false);
+                    lockAcquired = true;
+
                     // First count how many chunks will be removed
                     int chunksToRemove = 0;
                     using (var command = _connection.CreateCommand())
                     {
                         command.CommandText = "SELECT COUNT(*) FROM Chunks WHERE DocumentId = @DocumentId";
                         command.Parameters.AddWithValue("@DocumentId", documentId);
-                        chunksToRemove = Convert.ToInt32(await command.ExecuteScalarAsync());
+                        chunksToRemove = Convert.ToInt32(await command.ExecuteScalarAsync().ConfigureAwait(false));
                     }
 
                     // Use a transaction for both operations
@@ -392,7 +408,7 @@ namespace ollamidesk.RAG.Services
                                 command.Transaction = transaction;
                                 command.CommandText = "DELETE FROM Chunks WHERE DocumentId = @DocumentId";
                                 command.Parameters.AddWithValue("@DocumentId", documentId);
-                                await command.ExecuteNonQueryAsync();
+                                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
                             }
 
                             // Delete document
@@ -401,7 +417,7 @@ namespace ollamidesk.RAG.Services
                                 command.Transaction = transaction;
                                 command.CommandText = "DELETE FROM Documents WHERE DocumentId = @DocumentId";
                                 command.Parameters.AddWithValue("@DocumentId", documentId);
-                                await command.ExecuteNonQueryAsync();
+                                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
                             }
 
                             transaction.Commit();
@@ -418,7 +434,10 @@ namespace ollamidesk.RAG.Services
                 }
                 finally
                 {
-                    documentLock.Release();
+                    if (lockAcquired)
+                    {
+                        documentLock.Release();
+                    }
                 }
             }
             catch (Exception ex)
@@ -438,7 +457,7 @@ namespace ollamidesk.RAG.Services
             if (queryVector == null || queryVector.Length == 0)
                 return new List<(DocumentChunk, float)>();
 
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
             _diagnostics.StartOperation("VectorSearch");
 
             try
@@ -460,9 +479,9 @@ namespace ollamidesk.RAG.Services
                 {
                     command.CommandText = "SELECT ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson FROM Chunks";
 
-                    using (var reader = await command.ExecuteReaderAsync())
+                    using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
                     {
-                        while (await reader.ReadAsync())
+                        while (await reader.ReadAsync().ConfigureAwait(false))
                         {
                             // Create chunk
                             var chunk = new DocumentChunk
@@ -519,7 +538,7 @@ namespace ollamidesk.RAG.Services
             if (queryVector == null || queryVector.Length == 0 || documentIds == null || documentIds.Count == 0)
                 return new List<(DocumentChunk, float)>();
 
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
             _diagnostics.StartOperation("VectorSearchInDocuments");
 
             try
@@ -544,9 +563,9 @@ namespace ollamidesk.RAG.Services
                 {
                     command.CommandText = $"SELECT ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson FROM Chunks WHERE DocumentId IN ({documentIdsParam})";
 
-                    using (var reader = await command.ExecuteReaderAsync())
+                    using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
                     {
-                        while (await reader.ReadAsync())
+                        while (await reader.ReadAsync().ConfigureAwait(false))
                         {
                             // Create chunk
                             var chunk = new DocumentChunk
