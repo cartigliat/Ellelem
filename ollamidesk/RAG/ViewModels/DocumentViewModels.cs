@@ -63,8 +63,24 @@ namespace ollamidesk.RAG.ViewModels
             AddDocumentCommand = new RelayCommand(async _ => await AddDocumentAsync());
             RefreshCommand = new RelayCommand(async _ => await LoadDocumentsAsync());
 
-            // Load documents on startup
-            LoadDocumentsAsync().ConfigureAwait(false);
+            // Load documents on startup with proper error handling
+            Task.Run(async () => {
+                try
+                {
+                    await LoadDocumentsAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Error, "DocumentViewModel",
+                        $"Background load failed: {ex.Message}");
+
+                    // Use dispatcher to show error on UI thread if needed
+                    CollectionHelper.ExecuteOnUIThread(() => {
+                        MessageBox.Show("Error loading documents: " + ex.Message, "Error",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+                    });
+                }
+            });
 
             _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel", "Initialized DocumentViewModel");
         }
@@ -78,7 +94,7 @@ namespace ollamidesk.RAG.ViewModels
                 IsBusy = true;
                 _diagnostics.StartOperation("LoadDocuments");
 
-                var documents = await _documentManagementService.GetAllDocumentsAsync();
+                var documents = await _documentManagementService.GetAllDocumentsAsync().ConfigureAwait(false);
 
                 // Create view models for each document
                 var documentViewModels = documents.Select(doc => new DocumentItemViewModel(
@@ -88,8 +104,10 @@ namespace ollamidesk.RAG.ViewModels
                         _diagnostics,
                         _documentRepository)).ToList();
 
-                // Update collection in a single atomic operation
-                CollectionHelper.BatchUpdateSafely(Documents, documentViewModels, true);
+                // Update collection in a single atomic operation on UI thread
+                CollectionHelper.ExecuteOnUIThread(() => {
+                    CollectionHelper.BatchUpdateSafely(Documents, documentViewModels, true);
+                });
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
                     $"Loaded {documents.Count} documents");
@@ -143,7 +161,9 @@ namespace ollamidesk.RAG.ViewModels
                         _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
                             $"Adding document: {openFileDialog.FileName}");
 
-                        var document = await _documentManagementService.AddDocumentAsync(openFileDialog.FileName);
+                        // Add document asynchronously
+                        var document = await _documentManagementService.AddDocumentAsync(openFileDialog.FileName)
+                            .ConfigureAwait(false);
 
                         // Create a new document view model
                         var documentViewModel = new DocumentItemViewModel(
@@ -154,7 +174,9 @@ namespace ollamidesk.RAG.ViewModels
                             _documentRepository);
 
                         // Add document to collection as a single atomic operation
-                        CollectionHelper.AddSafely(Documents, documentViewModel);
+                        CollectionHelper.ExecuteOnUIThread(() => {
+                            CollectionHelper.AddSafely(Documents, documentViewModel);
+                        });
 
                         _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
                             $"Document added successfully: {document.Id}");
@@ -210,8 +232,9 @@ namespace ollamidesk.RAG.ViewModels
                     return (query, new List<DocumentChunk>());
                 }
 
-                // Retrieve relevant chunks using RetrievalService
-                var searchResults = await _retrievalService.RetrieveRelevantChunksAsync(query, selectedDocs);
+                // Retrieve relevant chunks using RetrievalService asynchronously
+                var searchResults = await _retrievalService.RetrieveRelevantChunksAsync(query, selectedDocs)
+                    .ConfigureAwait(false);
 
                 if (searchResults.Count == 0)
                 {
@@ -224,7 +247,8 @@ namespace ollamidesk.RAG.ViewModels
                 var relevantChunks = searchResults.Select(result => result.Chunk).ToList();
 
                 // Create augmented prompt using PromptEngineeringService
-                string augmentedPrompt = await _promptEngineeringService.CreateAugmentedPromptAsync(query, relevantChunks);
+                string augmentedPrompt = await _promptEngineeringService.CreateAugmentedPromptAsync(query, relevantChunks)
+                    .ConfigureAwait(false);
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
                     $"Generated augmented prompt with {relevantChunks.Count} sources");
@@ -331,7 +355,9 @@ namespace ollamidesk.RAG.ViewModels
         {
             try
             {
-                await _documentManagementService.UpdateDocumentSelectionAsync(Id, isSelected);
+                await _documentManagementService.UpdateDocumentSelectionAsync(Id, isSelected)
+                    .ConfigureAwait(false);
+
                 _diagnostics.Log(DiagnosticLevel.Debug, "DocumentItemViewModel",
                     $"Updated selection state for document {Id} to {isSelected}");
             }
@@ -354,13 +380,15 @@ namespace ollamidesk.RAG.ViewModels
                     $"Processing document: {Id}");
 
                 // Process the document using DocumentProcessingService
-                _document = await _documentProcessingService.ProcessDocumentAsync(_document);
+                _document = await _documentProcessingService.ProcessDocumentAsync(_document)
+                    .ConfigureAwait(false);
 
-                IsProcessed = true;
-                IsSelected = true;
-
-                // Update UI properties
-                OnPropertyChanged(nameof(Status));
+                // Update UI properties on UI thread
+                CollectionHelper.ExecuteOnUIThread(() => {
+                    IsProcessed = true;
+                    IsSelected = true;
+                    OnPropertyChanged(nameof(Status));
+                });
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                     $"Document processed successfully: {Id}");
@@ -378,16 +406,32 @@ namespace ollamidesk.RAG.ViewModels
             }
             finally
             {
-                IsProcessing = false;
-                OnPropertyChanged(nameof(Status));
+                // Update IsProcessing on UI thread
+                CollectionHelper.ExecuteOnUIThread(() => {
+                    IsProcessing = false;
+                    OnPropertyChanged(nameof(Status));
+                });
+
                 _diagnostics.EndOperation("ProcessDocument");
             }
         }
 
         private async Task DeleteDocumentAsync()
         {
-            if (MessageBox.Show($"Are you sure you want to delete {Name}?", "Confirm Delete",
-                MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            // MessageBox must be shown on UI thread
+            bool confirmDelete = false;
+
+            await Task.Run(() => {
+                CollectionHelper.ExecuteOnUIThread(() => {
+                    confirmDelete = MessageBox.Show(
+                        $"Are you sure you want to delete {Name}?",
+                        "Confirm Delete",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Question) == MessageBoxResult.Yes;
+                });
+            });
+
+            if (confirmDelete)
             {
                 try
                 {
@@ -395,20 +439,23 @@ namespace ollamidesk.RAG.ViewModels
                     _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                         $"Deleting document: {Id}");
 
-                    await _documentManagementService.DeleteDocumentAsync(Id);
+                    await _documentManagementService.DeleteDocumentAsync(Id)
+                        .ConfigureAwait(false);
 
                     // Remove from collection - find parent ViewModel
                     var parentViewModel = GetParentViewModel();
                     if (parentViewModel != null)
                     {
-                        var docToRemove = parentViewModel.Documents.FirstOrDefault(d => d.Id == Id);
-                        if (docToRemove != null)
-                        {
-                            CollectionHelper.RemoveSafely(parentViewModel.Documents, docToRemove);
+                        CollectionHelper.ExecuteOnUIThread(() => {
+                            var docToRemove = parentViewModel.Documents.FirstOrDefault(d => d.Id == Id);
+                            if (docToRemove != null)
+                            {
+                                CollectionHelper.RemoveSafely(parentViewModel.Documents, docToRemove);
+                            }
+                        });
 
-                            _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
-                                $"Removed document from UI: {Id}");
-                        }
+                        _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
+                            $"Removed document from UI: {Id}");
                     }
 
                     _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",

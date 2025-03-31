@@ -57,43 +57,70 @@ namespace ollamidesk
             this.Close();
         }
 
-        private void MenuToggleButton_Click(object sender, RoutedEventArgs e)
+        private async void MenuToggleButton_Click(object sender, RoutedEventArgs e)
         {
-            // Create a side menu window through DI
-            var sideMenuWindow = ServiceProviderFactory.GetService<SideMenuWindow>();
-
-            if (sideMenuWindow.ShowDialog() == true)
+            // Disable button while processing to prevent multiple clicks
+            MenuToggleButton.IsEnabled = false;
+            try
             {
-                // Update the selected model in the main window
-                if (!string.IsNullOrEmpty(sideMenuWindow.SelectedModel))
+                // Create a side menu window through DI
+                var sideMenuWindow = ServiceProviderFactory.GetService<SideMenuWindow>();
+
+                // ShowDialog is inherently blocking - this is expected UI behavior for modal dialogs
+                if (sideMenuWindow.ShowDialog() == true)
                 {
-                    string previousModelName = _viewModel.ModelName;
-                    string newModelName = sideMenuWindow.SelectedModel;
-
-                    // Only reload the model if it's different from the current one
-                    if (previousModelName != newModelName)
+                    // After the dialog closes, handle model updates asynchronously
+                    if (!string.IsNullOrEmpty(sideMenuWindow.SelectedModel))
                     {
-                        ModelNameTextBlock.Text = newModelName;
+                        await UpdateModelAsync(sideMenuWindow.SelectedModel);
+                    }
 
-                        // Load the selected model using the factory
-                        var factory = ServiceProviderFactory.GetService<OllamaModelFactory>();
-                        var selectedModel = factory.CreateModel(newModelName);
-
+                    // Update the loaded document
+                    if (!string.IsNullOrEmpty(sideMenuWindow.LoadedDocument))
+                    {
+                        _loadedDocument = sideMenuWindow.LoadedDocument;
                         _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
-                            $"Model changed to: {newModelName}");
-
-                        // Update the ViewModel with the new model
-                        _viewModel.UpdateModelService(selectedModel, newModelName);
+                            $"Document loaded with length: {sideMenuWindow.LoadedDocument.Length} chars");
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "MainWindow",
+                    $"Error processing dialog result: {ex.Message}");
+                MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                MenuToggleButton.IsEnabled = true;
+            }
+        }
 
-                // Update the loaded document
-                if (!string.IsNullOrEmpty(sideMenuWindow.LoadedDocument))
+        private async Task UpdateModelAsync(string newModelName)
+        {
+            string previousModelName = _viewModel.ModelName;
+
+            // Only reload the model if it's different from the current one
+            if (previousModelName != newModelName)
+            {
+                // Update UI immediately
+                ModelNameTextBlock.Text = newModelName;
+
+                // Load the selected model using the factory
+                var factory = ServiceProviderFactory.GetService<OllamaModelFactory>();
+                var selectedModel = factory.CreateModel(newModelName);
+
+                // Test connection in background if possible
+                if (selectedModel is OllamaModel ollamaModel)
                 {
-                    _loadedDocument = sideMenuWindow.LoadedDocument;
-                    _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
-                        $"Document loaded with length: {sideMenuWindow.LoadedDocument.Length} chars");
+                    await ollamaModel.TestConnectionAsync().ConfigureAwait(false);
                 }
+
+                _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
+                    $"Model changed to: {newModelName}");
+
+                // Update the ViewModel with the new model
+                _viewModel.UpdateModelService(selectedModel, newModelName);
             }
         }
 
