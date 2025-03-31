@@ -9,6 +9,7 @@ using Microsoft.Win32;
 using ollamidesk.Common.MVVM;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Diagnostics;
+using ollamidesk.RAG.Services;
 using ollamidesk.RAG.Services.Interfaces;
 using ollamidesk.RAG.DocumentProcessors.Implementations;
 
@@ -23,6 +24,7 @@ namespace ollamidesk.RAG.ViewModels
         private readonly RagDiagnosticsService _diagnostics;
         private readonly IDocumentRepository _documentRepository;
         private readonly DocumentProcessorFactory _documentProcessorFactory;
+        private readonly IRagConfigurationService _configService;
         private bool _isRagEnabled;
         private bool _isBusy;
 
@@ -50,7 +52,8 @@ namespace ollamidesk.RAG.ViewModels
             IPromptEngineeringService promptEngineeringService,
             RagDiagnosticsService diagnostics,
             IDocumentRepository documentRepository,
-            DocumentProcessorFactory documentProcessorFactory)
+            DocumentProcessorFactory documentProcessorFactory,
+            IRagConfigurationService configService)
         {
             _documentManagementService = documentManagementService ?? throw new ArgumentNullException(nameof(documentManagementService));
             _documentProcessingService = documentProcessingService ?? throw new ArgumentNullException(nameof(documentProcessingService));
@@ -59,6 +62,7 @@ namespace ollamidesk.RAG.ViewModels
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
             _documentProcessorFactory = documentProcessorFactory ?? throw new ArgumentNullException(nameof(documentProcessorFactory));
+            _configService = configService ?? throw new ArgumentNullException(nameof(configService));
 
             AddDocumentCommand = new RelayCommand(async _ => await AddDocumentAsync());
             RefreshCommand = new RelayCommand(async _ => await LoadDocumentsAsync());
@@ -225,6 +229,9 @@ namespace ollamidesk.RAG.ViewModels
                     .Select(d => d.Id)
                     .ToList();
 
+                _diagnostics.Log(DiagnosticLevel.Info, "DocumentViewModel",
+                    $"Selected document IDs: {string.Join(", ", selectedDocs)}");
+
                 if (selectedDocs.Count == 0)
                 {
                     _diagnostics.Log(DiagnosticLevel.Warning, "DocumentViewModel",
@@ -232,9 +239,17 @@ namespace ollamidesk.RAG.ViewModels
                     return (query, new List<DocumentChunk>());
                 }
 
+                // Use the provided maxResults if specified, otherwise use configured value
+                int effectiveMaxResults = _configService.MaxRetrievedChunks;
+
                 // Retrieve relevant chunks using RetrievalService asynchronously
-                var searchResults = await _retrievalService.RetrieveRelevantChunksAsync(query, selectedDocs)
+                _diagnostics.StartOperation("QueryEmbeddingGeneration");
+                var searchResults = await _retrievalService.RetrieveRelevantChunksAsync(
+                    query,
+                    selectedDocs,
+                    effectiveMaxResults)
                     .ConfigureAwait(false);
+                _diagnostics.EndOperation("QueryEmbeddingGeneration");
 
                 if (searchResults.Count == 0)
                 {
@@ -429,7 +444,7 @@ namespace ollamidesk.RAG.ViewModels
                         MessageBoxButton.YesNo,
                         MessageBoxImage.Question) == MessageBoxResult.Yes;
                 });
-            });
+            }).ConfigureAwait(false);
 
             if (confirmDelete)
             {

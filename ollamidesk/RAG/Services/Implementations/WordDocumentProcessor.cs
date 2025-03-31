@@ -149,7 +149,7 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                         throw new DocumentProcessingException(
                             $"Failed to process Word document: {Path.GetFileName(filePath)}", ex);
                     }
-                });
+                }).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not DocumentProcessingException)
             {
@@ -261,7 +261,7 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                         throw new DocumentProcessingException(
                             $"Failed to process structured Word document: {Path.GetFileName(filePath)}", ex);
                     }
-                });
+                }).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not DocumentProcessingException)
             {

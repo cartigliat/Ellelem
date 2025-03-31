@@ -253,7 +253,8 @@ namespace ollamidesk.RAG.ViewModels
                     if (selectedDocs.Count > 0)
                     {
                         // Retrieve relevant chunks using the RetrievalService
-                        var searchResults = await _retrievalService.RetrieveRelevantChunksAsync(userQuery, selectedDocs);
+                        var searchResults = await _retrievalService.RetrieveRelevantChunksAsync(userQuery, selectedDocs)
+                            .ConfigureAwait(false);
 
                         // Extract chunks from search results
                         var relevantChunks = searchResults.Select(result => result.Chunk).ToList();
@@ -261,7 +262,8 @@ namespace ollamidesk.RAG.ViewModels
                         if (relevantChunks.Count > 0)
                         {
                             // Create augmented prompt using the PromptEngineeringService
-                            prompt = await _promptEngineeringService.CreateAugmentedPromptAsync(userQuery, relevantChunks);
+                            prompt = await _promptEngineeringService.CreateAugmentedPromptAsync(userQuery, relevantChunks)
+                                .ConfigureAwait(false);
                             sources = relevantChunks;
                             usedRag = true;
 
@@ -296,7 +298,7 @@ namespace ollamidesk.RAG.ViewModels
                         userQuery,
                         historyContext,
                         sources
-                    );
+                    ).ConfigureAwait(false);
                 }
                 else
                 {
@@ -304,7 +306,7 @@ namespace ollamidesk.RAG.ViewModels
                         prompt,
                         string.Empty, // No loaded document, using RAG instead
                         historyContext
-                    );
+                    ).ConfigureAwait(false);
                 }
 
                 // Create chat message

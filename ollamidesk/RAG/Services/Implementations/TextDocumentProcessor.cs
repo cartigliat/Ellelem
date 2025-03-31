@@ -37,7 +37,7 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                 _diagnostics.Log(DiagnosticLevel.Info, "TextDocumentProcessor",
                     $"Reading text file: {Path.GetFileName(filePath)}");
 
-                string content = await File.ReadAllTextAsync(filePath);
+                string content = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
 
                 _diagnostics.Log(DiagnosticLevel.Info, "TextDocumentProcessor",
                     $"Successfully read {content.Length} characters from text file");
@@ -67,7 +67,7 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                 _diagnostics.Log(DiagnosticLevel.Info, "TextDocumentProcessor",
                     $"Extracting structured content from {Path.GetFileName(filePath)}");
 
-                string content = await File.ReadAllTextAsync(filePath);
+                string content = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
 
                 var structuredDoc = new StructuredDocument
                 {

@@ -46,7 +46,7 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                 _diagnostics.Log(DiagnosticLevel.Info, "MarkdownDocumentProcessor",
                     $"Reading markdown file: {Path.GetFileName(filePath)}");
 
-                string markdown = await File.ReadAllTextAsync(filePath);
+                string markdown = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
 
                 // Parse markdown to HTML then strip HTML tags for plain text
                 string plainText = ConvertMarkdownToPlainText(markdown);
@@ -79,7 +79,7 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                 _diagnostics.Log(DiagnosticLevel.Info, "MarkdownDocumentProcessor",
                     $"Extracting structured content from {Path.GetFileName(filePath)}");
 
-                string markdown = await File.ReadAllTextAsync(filePath);
+                string markdown = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
 
                 // Parse the markdown into an abstract syntax tree
                 MarkdownDocument document = Markdig.Markdown.Parse(markdown, _pipeline);

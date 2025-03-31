@@ -46,7 +46,7 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                     $"Extracting text from PDF: {IOPath.GetFileName(filePath)}");
 
                 // Use Task.Run to execute file I/O and processing on a background thread
-                return await Task.Run(() =>
+                return await Task.Run(async () =>
                 {
                     var fullText = new StringBuilder();
 
@@ -73,8 +73,8 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                         }
                     }
 
-                    return fullText.ToString();
-                });
+                    return await Task.FromResult(fullText.ToString()).ConfigureAwait(false);
+                }).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -100,7 +100,7 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                     $"Extracting structured content from PDF: {IOPath.GetFileName(filePath)}");
 
                 // Use Task.Run to execute file I/O and processing on a background thread
-                return await Task.Run(() =>
+                return await Task.Run(async () =>
                 {
                     var structuredDoc = new StructuredDocument
                     {
@@ -123,8 +123,8 @@ namespace ollamidesk.RAG.DocumentProcessors.Implementations
                     // After extracting all content, try to identify structure
                     EnhanceDocumentStructure(structuredDoc);
 
-                    return structuredDoc;
-                });
+                    return await Task.FromResult(structuredDoc).ConfigureAwait(false);
+                }).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

@@ -60,9 +60,12 @@ namespace ollamidesk.RAG.Services.Implementations
             if (_isInitialized)
                 return;
 
-            await _initializationLock.WaitAsync();
+            bool lockAcquired = false;
             try
             {
+                await _initializationLock.WaitAsync().ConfigureAwait(false);
+                lockAcquired = true;
+
                 if (_isInitialized)
                     return;
 
@@ -72,35 +75,44 @@ namespace ollamidesk.RAG.Services.Implementations
                     {
                         // Get file lock for reading
                         var fileLock = GetFileLock(_metadataFile);
-                        await fileLock.WaitAsync();
-                        string json;
-
+                        bool fileLockAcquired = false;
                         try
                         {
-                            json = await File.ReadAllTextAsync(_metadataFile);
+                            await fileLock.WaitAsync().ConfigureAwait(false);
+                            fileLockAcquired = true;
+
+                            string json = await File.ReadAllTextAsync(_metadataFile).ConfigureAwait(false);
+                            var documents = JsonSerializer.Deserialize<List<Document>>(json);
+
+                            if (documents != null)
+                            {
+                                bool cacheLockAcquired = false;
+                                try
+                                {
+                                    await _cacheLock.WaitAsync().ConfigureAwait(false);
+                                    cacheLockAcquired = true;
+
+                                    _documentsCache.Clear();
+                                    foreach (var doc in documents)
+                                    {
+                                        // We now always store full content
+                                        _documentsCache[doc.Id] = doc;
+                                    }
+                                }
+                                finally
+                                {
+                                    if (cacheLockAcquired)
+                                    {
+                                        _cacheLock.Release();
+                                    }
+                                }
+                            }
                         }
                         finally
                         {
-                            fileLock.Release();
-                        }
-
-                        var documents = JsonSerializer.Deserialize<List<Document>>(json);
-
-                        if (documents != null)
-                        {
-                            await _cacheLock.WaitAsync();
-                            try
+                            if (fileLockAcquired)
                             {
-                                _documentsCache.Clear();
-                                foreach (var doc in documents)
-                                {
-                                    // We now always store full content
-                                    _documentsCache[doc.Id] = doc;
-                                }
-                            }
-                            finally
-                            {
-                                _cacheLock.Release();
+                                fileLock.Release();
                             }
                         }
 
@@ -119,7 +131,10 @@ namespace ollamidesk.RAG.Services.Implementations
             }
             finally
             {
-                _initializationLock.Release();
+                if (lockAcquired)
+                {
+                    _initializationLock.Release();
+                }
             }
         }
 
@@ -129,9 +144,12 @@ namespace ollamidesk.RAG.Services.Implementations
             {
                 List<Document> documentsToSave;
 
-                await _cacheLock.WaitAsync();
+                bool cacheLockAcquired = false;
                 try
                 {
+                    await _cacheLock.WaitAsync().ConfigureAwait(false);
+                    cacheLockAcquired = true;
+
                     // Clone documents for serialization
                     documentsToSave = _documentsCache.Values.Select(doc =>
                     {
@@ -156,21 +174,30 @@ namespace ollamidesk.RAG.Services.Implementations
                 }
                 finally
                 {
-                    _cacheLock.Release();
+                    if (cacheLockAcquired)
+                    {
+                        _cacheLock.Release();
+                    }
                 }
 
                 string json = JsonSerializer.Serialize(documentsToSave);
 
                 // Get file lock for writing
                 var fileLock = GetFileLock(_metadataFile);
-                await fileLock.WaitAsync();
+                bool fileLockAcquired = false;
                 try
                 {
-                    await File.WriteAllTextAsync(_metadataFile, json);
+                    await fileLock.WaitAsync().ConfigureAwait(false);
+                    fileLockAcquired = true;
+
+                    await File.WriteAllTextAsync(_metadataFile, json).ConfigureAwait(false);
                 }
                 finally
                 {
-                    fileLock.Release();
+                    if (fileLockAcquired)
+                    {
+                        fileLock.Release();
+                    }
                 }
 
                 _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
@@ -185,26 +212,35 @@ namespace ollamidesk.RAG.Services.Implementations
 
         public async Task<List<Document>> GetAllDocumentsAsync()
         {
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
 
-            await _cacheLock.WaitAsync();
+            bool lockAcquired = false;
             try
             {
+                await _cacheLock.WaitAsync().ConfigureAwait(false);
+                lockAcquired = true;
+
                 return _documentsCache.Values.ToList();
             }
             finally
             {
-                _cacheLock.Release();
+                if (lockAcquired)
+                {
+                    _cacheLock.Release();
+                }
             }
         }
 
         public async Task<Document> GetDocumentByIdAsync(string id)
         {
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
 
-            await _cacheLock.WaitAsync();
+            bool lockAcquired = false;
             try
             {
+                await _cacheLock.WaitAsync().ConfigureAwait(false);
+                lockAcquired = true;
+
                 if (_documentsCache.TryGetValue(id, out var document))
                 {
                     return document;
@@ -212,7 +248,10 @@ namespace ollamidesk.RAG.Services.Implementations
             }
             finally
             {
-                _cacheLock.Release();
+                if (lockAcquired)
+                {
+                    _cacheLock.Release();
+                }
             }
 
             _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
@@ -222,21 +261,27 @@ namespace ollamidesk.RAG.Services.Implementations
 
         public async Task<Document> LoadFullContentAsync(string documentId)
         {
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
 
-            Document? document = null; // Fix: Make document nullable
-            await _cacheLock.WaitAsync();
+            Document? document = null;
+            bool lockAcquired = false;
             try
             {
+                await _cacheLock.WaitAsync().ConfigureAwait(false);
+                lockAcquired = true;
+
                 if (!_documentsCache.TryGetValue(documentId, out var docRef))
                 {
                     throw new KeyNotFoundException($"Document with ID {documentId} not found");
                 }
-                document = docRef; // Assign to our nullable variable
+                document = docRef;
             }
             finally
             {
-                _cacheLock.Release();
+                if (lockAcquired)
+                {
+                    _cacheLock.Release();
+                }
             }
 
             // Check for null after lock is released
@@ -263,14 +308,20 @@ namespace ollamidesk.RAG.Services.Implementations
                 if (IsTextFile(Path.GetExtension(document.FilePath)))
                 {
                     var fileLock = GetFileLock(document.FilePath);
-                    await fileLock.WaitAsync();
+                    bool fileLockAcquired = false;
                     try
                     {
-                        document.Content = await File.ReadAllTextAsync(document.FilePath);
+                        await fileLock.WaitAsync().ConfigureAwait(false);
+                        fileLockAcquired = true;
+
+                        document.Content = await File.ReadAllTextAsync(document.FilePath).ConfigureAwait(false);
                     }
                     finally
                     {
-                        fileLock.Release();
+                        if (fileLockAcquired)
+                        {
+                            fileLock.Release();
+                        }
                     }
 
                     _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
@@ -298,7 +349,7 @@ namespace ollamidesk.RAG.Services.Implementations
 
         public async Task SaveDocumentAsync(Document document)
         {
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
 
             // Always save content to disk
             if (!string.IsNullOrEmpty(document.Content))
@@ -311,14 +362,20 @@ namespace ollamidesk.RAG.Services.Implementations
                     Directory.CreateDirectory(directory);
 
                 var fileLock = GetFileLock(documentPath);
-                await fileLock.WaitAsync();
+                bool fileLockAcquired = false;
                 try
                 {
-                    await File.WriteAllTextAsync(documentPath, document.Content);
+                    await fileLock.WaitAsync().ConfigureAwait(false);
+                    fileLockAcquired = true;
+
+                    await File.WriteAllTextAsync(documentPath, document.Content).ConfigureAwait(false);
                 }
                 finally
                 {
-                    fileLock.Release();
+                    if (fileLockAcquired)
+                    {
+                        fileLock.Release();
+                    }
                 }
 
                 _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
@@ -332,14 +389,20 @@ namespace ollamidesk.RAG.Services.Implementations
                 string embeddingsJson = JsonSerializer.Serialize(document.Chunks);
 
                 var fileLock = GetFileLock(embeddingsPath);
-                await fileLock.WaitAsync();
+                bool fileLockAcquired = false;
                 try
                 {
-                    await File.WriteAllTextAsync(embeddingsPath, embeddingsJson);
+                    await fileLock.WaitAsync().ConfigureAwait(false);
+                    fileLockAcquired = true;
+
+                    await File.WriteAllTextAsync(embeddingsPath, embeddingsJson).ConfigureAwait(false);
                 }
                 finally
                 {
-                    fileLock.Release();
+                    if (fileLockAcquired)
+                    {
+                        fileLock.Release();
+                    }
                 }
 
                 _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
@@ -347,18 +410,24 @@ namespace ollamidesk.RAG.Services.Implementations
             }
 
             // Update cache
-            await _cacheLock.WaitAsync();
+            bool cacheLockAcquired = false;
             try
             {
+                await _cacheLock.WaitAsync().ConfigureAwait(false);
+                cacheLockAcquired = true;
+
                 _documentsCache[document.Id] = document;
             }
             finally
             {
-                _cacheLock.Release();
+                if (cacheLockAcquired)
+                {
+                    _cacheLock.Release();
+                }
             }
 
             // Update metadata
-            await SaveMetadataAsync();
+            await SaveMetadataAsync().ConfigureAwait(false);
 
             _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
                 $"Document saved: {document.Id}, Name: {document.Name}, Size: {document.FileSize / 1024.0:F2} KB");
@@ -366,13 +435,16 @@ namespace ollamidesk.RAG.Services.Implementations
 
         public async Task DeleteDocumentAsync(string id)
         {
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
 
             Document? document = null;
 
-            await _cacheLock.WaitAsync();
+            bool cacheLockAcquired = false;
             try
             {
+                await _cacheLock.WaitAsync().ConfigureAwait(false);
+                cacheLockAcquired = true;
+
                 if (_documentsCache.TryGetValue(id, out var docRef))
                 {
                     document = docRef;
@@ -382,7 +454,10 @@ namespace ollamidesk.RAG.Services.Implementations
             }
             finally
             {
-                _cacheLock.Release();
+                if (cacheLockAcquired)
+                {
+                    _cacheLock.Release();
+                }
             }
 
             if (document != null)
@@ -392,14 +467,20 @@ namespace ollamidesk.RAG.Services.Implementations
                 if (File.Exists(documentPath))
                 {
                     var fileLock = GetFileLock(documentPath);
-                    await fileLock.WaitAsync();
+                    bool fileLockAcquired = false;
                     try
                     {
+                        await fileLock.WaitAsync().ConfigureAwait(false);
+                        fileLockAcquired = true;
+
                         File.Delete(documentPath);
                     }
                     finally
                     {
-                        fileLock.Release();
+                        if (fileLockAcquired)
+                        {
+                            fileLock.Release();
+                        }
                     }
                 }
 
@@ -408,19 +489,25 @@ namespace ollamidesk.RAG.Services.Implementations
                 if (File.Exists(embeddingsPath))
                 {
                     var fileLock = GetFileLock(embeddingsPath);
-                    await fileLock.WaitAsync();
+                    bool fileLockAcquired = false;
                     try
                     {
+                        await fileLock.WaitAsync().ConfigureAwait(false);
+                        fileLockAcquired = true;
+
                         File.Delete(embeddingsPath);
                     }
                     finally
                     {
-                        fileLock.Release();
+                        if (fileLockAcquired)
+                        {
+                            fileLock.Release();
+                        }
                     }
                 }
 
                 // Update metadata
-                await SaveMetadataAsync();
+                await SaveMetadataAsync().ConfigureAwait(false);
 
                 _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
                     $"Document deleted: {id}");
@@ -434,11 +521,14 @@ namespace ollamidesk.RAG.Services.Implementations
 
         public async Task<DocumentChunk> GetChunkByIdAsync(string chunkId)
         {
-            await EnsureInitializedAsync();
+            await EnsureInitializedAsync().ConfigureAwait(false);
 
-            await _cacheLock.WaitAsync();
+            bool lockAcquired = false;
             try
             {
+                await _cacheLock.WaitAsync().ConfigureAwait(false);
+                lockAcquired = true;
+
                 foreach (var document in _documentsCache.Values)
                 {
                     if (document.Chunks != null)
@@ -453,7 +543,10 @@ namespace ollamidesk.RAG.Services.Implementations
             }
             finally
             {
-                _cacheLock.Release();
+                if (lockAcquired)
+                {
+                    _cacheLock.Release();
+                }
             }
 
             _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
