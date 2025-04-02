@@ -18,7 +18,6 @@ namespace ollamidesk
         private readonly IOllamaModel _ollamaModel;
         private readonly RagDiagnosticsService _diagnostics;
         private readonly IDiagnosticsUIService _diagnosticsUIService;
-        private string? _loadedDocument;
 
         // Constructor with DI
         public MainWindow(
@@ -75,13 +74,6 @@ namespace ollamidesk
                         await UpdateModelAsync(sideMenuWindow.SelectedModel);
                     }
 
-                    // Update the loaded document
-                    if (!string.IsNullOrEmpty(sideMenuWindow.LoadedDocument))
-                    {
-                        _loadedDocument = sideMenuWindow.LoadedDocument;
-                        _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
-                            $"Document loaded with length: {sideMenuWindow.LoadedDocument.Length} chars");
-                    }
                 }
             }
             catch (Exception ex)

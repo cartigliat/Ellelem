@@ -94,6 +94,12 @@ namespace ollamidesk.Configuration
         /// Minimum similarity score for a chunk to be considered relevant
         /// </summary>
         public float MinSimilarityScore { get; set; } = 0.3f;
+
+        // Add this property:
+        /// <summary>
+        /// Number of chunks to process in parallel during embedding generation.
+        /// </summary>
+        public int EmbeddingBatchSize { get; set; } = 15; // Keep the default here
     }
 
     /// <summary>

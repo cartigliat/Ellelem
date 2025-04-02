@@ -22,7 +22,7 @@ namespace ollamidesk.RAG.Services.Implementations
 
         // Add semaphore for throttling concurrent embedding requests
         private readonly SemaphoreSlim _requestSemaphore;
-        private readonly int _maxConcurrentRequests = 3; // Default limit for concurrent embedding requests
+        private readonly int _maxConcurrentRequests; // Default limit for concurrent embedding requests
 
         public OllamaEmbeddingService(
             OllamaSettings settings,
@@ -43,8 +43,13 @@ namespace ollamidesk.RAG.Services.Implementations
             _retryDelayMs = settings.RetryDelayMs;
 
             // Initialize request throttling
-            _maxConcurrentRequests = settings.MaxConcurrentRequests > 0 ?
-                settings.MaxConcurrentRequests : 3; // Default to 3 if not specified
+            // In OllamaEmbeddingService constructor:
+            _maxConcurrentRequests = settings.MaxConcurrentRequests; // Directly use the setting
+            if (_maxConcurrentRequests <= 0) // Add a check for invalid configuration
+            {
+                _diagnostics.Log(DiagnosticLevel.Warning, "OllamaEmbeddingService", $"Invalid MaxConcurrentRequests ({_maxConcurrentRequests}). Using default value of 3.");
+                _maxConcurrentRequests = 3;
+            }
             _requestSemaphore = new SemaphoreSlim(_maxConcurrentRequests, _maxConcurrentRequests);
 
             // Use the HttpClientFactory to create a client

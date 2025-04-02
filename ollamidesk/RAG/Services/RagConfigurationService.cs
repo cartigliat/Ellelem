@@ -22,6 +22,7 @@ namespace ollamidesk.RAG.Services
         private int _maxRetrievedChunks;
         private float _minSimilarityScore;
         private bool _useSemanticChunking;
+        private int _embeddingBatchSize;
         private int _embeddingModelDimension;
 
         // Modified: Changed to nullable event handler
@@ -46,6 +47,7 @@ namespace ollamidesk.RAG.Services
             _chunkOverlap = initialSettings.ChunkOverlap;
             _maxRetrievedChunks = initialSettings.MaxRetrievedChunks;
             _minSimilarityScore = initialSettings.MinSimilarityScore;
+            _embeddingBatchSize = initialSettings.EmbeddingBatchSize;
 
             // Default values for any new parameters
             _useSemanticChunking = false;
@@ -91,6 +93,12 @@ namespace ollamidesk.RAG.Services
             set => SetProperty(ref _embeddingModelDimension, value);
         }
 
+        public int EmbeddingBatchSize
+        {
+            get => _embeddingBatchSize;
+            set => SetProperty(ref _embeddingBatchSize, value);
+        }
+
         /// <summary>
         /// Returns a copy of the current RAG settings
         /// </summary>
@@ -102,7 +110,8 @@ namespace ollamidesk.RAG.Services
                 ChunkSize = ChunkSize,
                 ChunkOverlap = ChunkOverlap,
                 MaxRetrievedChunks = MaxRetrievedChunks,
-                MinSimilarityScore = MinSimilarityScore
+                MinSimilarityScore = MinSimilarityScore,
+                EmbeddingBatchSize = EmbeddingBatchSize
                 // Note: Extended properties not in RagSettings yet
             };
         }
@@ -124,6 +133,7 @@ namespace ollamidesk.RAG.Services
                 appSettings.Rag.ChunkOverlap = _chunkOverlap;
                 appSettings.Rag.MaxRetrievedChunks = _maxRetrievedChunks;
                 appSettings.Rag.MinSimilarityScore = _minSimilarityScore;
+                appSettings.Rag.EmbeddingBatchSize = _embeddingBatchSize;
 
                 // Add any new properties to the RagSettings class if needed
 
@@ -158,6 +168,7 @@ namespace ollamidesk.RAG.Services
             MinSimilarityScore = 0.3f;
             UseSemanticChunking = false;
             EmbeddingModelDimension = 384;
+            EmbeddingBatchSize = 15; // Reset to default
 
             await SaveConfigurationAsync();
 
@@ -178,6 +189,7 @@ namespace ollamidesk.RAG.Services
             ChunkOverlap = settings.ChunkOverlap;
             MaxRetrievedChunks = settings.MaxRetrievedChunks;
             MinSimilarityScore = settings.MinSimilarityScore;
+            EmbeddingBatchSize = settings.EmbeddingBatchSize;
 
             await SaveConfigurationAsync();
 

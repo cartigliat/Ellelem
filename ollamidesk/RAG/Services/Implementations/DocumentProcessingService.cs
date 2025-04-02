@@ -44,6 +44,10 @@ namespace ollamidesk.RAG.Services.Implementations
 
             _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
                 $"Service initialized with settings: ChunkSize={_configService.ChunkSize}, ChunkOverlap={_configService.ChunkOverlap}, EmbeddingBatchSize={_embeddingBatchSize}");
+
+            // Log the configured batch size
+            _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
+                $"Service initialized with settings: ChunkSize={_configService.ChunkSize}, ChunkOverlap={_configService.ChunkOverlap}, EmbeddingBatchSize={_configService.EmbeddingBatchSize}"); // Use configService here
         }
 
         // Adding back the required interface method, but with simplified implementation
@@ -128,10 +132,11 @@ namespace ollamidesk.RAG.Services.Implementations
                 int processedChunks = 0;
 
                 // Process chunks in batches
-                for (int i = 0; i < document.Chunks.Count; i += _embeddingBatchSize)
+                for (int i = 0; i < document.Chunks.Count; i += _configService.EmbeddingBatchSize)
                 {
                     // Get current batch (up to batchSize chunks)
-                    int currentBatchSize = Math.Min(_embeddingBatchSize, document.Chunks.Count - i);
+                    int currentBatchSize = Math.Min(_configService.EmbeddingBatchSize, document.Chunks.Count - i);
+
                     var batch = document.Chunks.GetRange(i, currentBatchSize);
 
                     // Create tasks for parallel processing

@@ -16,7 +16,7 @@ namespace ollamidesk
         private readonly CommandLineService _commandLineService;
 
         public string? SelectedModel { get; private set; }
-        public string? LoadedDocument { get; private set; }
+        // LoadedDocument property removed
 
         // Constructor with DI
         public SideMenuWindow(
@@ -78,32 +78,7 @@ namespace ollamidesk
             }
         }
 
-        private void LoadDocumentButton_Click(object sender, RoutedEventArgs e)
-        {
-            OpenFileDialog openFileDialog = new OpenFileDialog
-            {
-                Filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*",
-                Title = "Select a document to load"
-            };
-
-            if (openFileDialog.ShowDialog() == true)
-            {
-                try
-                {
-                    string fileName = openFileDialog.FileName;
-                    LoadedDocument = File.ReadAllText(fileName);
-                    _diagnostics.Log(DiagnosticLevel.Info, "SideMenuWindow",
-                        $"Document loaded: {Path.GetFileName(fileName)}");
-                    MessageBox.Show($"Document loaded: {Path.GetFileName(fileName)}", "Document Loaded", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                catch (Exception ex)
-                {
-                    _diagnostics.Log(DiagnosticLevel.Error, "SideMenuWindow",
-                        $"Error loading document: {ex.Message}");
-                    MessageBox.Show($"Error loading document: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-            }
-        }
+        // LoadDocumentButton_Click method removed
 
         private void RagButton_Click(object sender, RoutedEventArgs e)
         {

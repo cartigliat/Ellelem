@@ -47,9 +47,13 @@ namespace ollamidesk
             _retryDelayMs = settings.RetryDelayMs;
             _systemPrompt = settings.SystemPrompt;
 
-            // Initialize request throttling
-            _maxConcurrentRequests = settings.MaxConcurrentRequests > 0 ?
-                settings.MaxConcurrentRequests : 3; // Default to 3 if not specified
+            // In OllamaModel constructor:
+            _maxConcurrentRequests = settings.MaxConcurrentRequests; // Directly use the setting
+            if (_maxConcurrentRequests <= 0) // Add a check for invalid configuration
+            {
+                _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel", $"Invalid MaxConcurrentRequests ({_maxConcurrentRequests}). Using default value of 3.");
+                _maxConcurrentRequests = 3;
+            }
             _requestSemaphore = new SemaphoreSlim(_maxConcurrentRequests, _maxConcurrentRequests);
 
             // Use the HttpClientFactory to create a client

@@ -22,6 +22,9 @@ namespace ollamidesk.RAG.Services
         bool UseSemanticChunking { get; set; }
         int EmbeddingModelDimension { get; set; }
 
+        // Add this property:
+        int EmbeddingBatchSize { get; set; }
+
         // Methods
         /// <summary>
         /// Saves configuration changes to disk
