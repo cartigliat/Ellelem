@@ -1,93 +1,54 @@
-// Modified OllamaModel.cs with improved async patterns
+// ollamidesk/OllamaModel.cs
+// Refactored to use IOllamaApiClient
 using System;
 using System.Collections.Generic;
-using System.Net.Http;
-using System.Text;
-using System.Text.Json;
-using System.Threading;
+using System.Linq; // Added for LINQ usage
+using System.Text; // Added for StringBuilder
 using System.Threading.Tasks;
-using System.Linq;
-using ollamidesk.Configuration;
+using ollamidesk.Configuration; // Keep for settings access if needed indirectly
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
+using ollamidesk.RAG.Services.Interfaces; // Added for IOllamaApiClient
+using ollamidesk.RAG.Exceptions; // Added for specific exceptions
+
 
 namespace ollamidesk
 {
     public class OllamaModel : IOllamaModel
     {
         private readonly string _modelName;
-        private readonly HttpClient _httpClient;
-        private readonly string _apiUrl;
-        private readonly int _maxRetries;
-        private readonly int _retryDelayMs;
         private readonly string _systemPrompt;
         private readonly RagDiagnosticsService _diagnostics;
+        private readonly IOllamaApiClient _apiClient; // <-- Dependency Changed
+        private readonly OllamaSettings _settings; // Keep settings if needed for options
 
-        // Add semaphore for throttling concurrent requests
-        private readonly SemaphoreSlim _requestSemaphore;
-        private readonly int _maxConcurrentRequests;
 
         public OllamaModel(
             string modelName,
-            OllamaSettings settings,
-            IHttpClientFactory httpClientFactory,
+            OllamaSettings settings, // Keep settings
+            IOllamaApiClient apiClient, // <-- Inject Api Client
             RagDiagnosticsService diagnostics)
         {
             _modelName = modelName ?? throw new ArgumentNullException(nameof(modelName));
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings)); // Store settings
+            _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient)); // Store injected client
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
-            if (settings == null)
-                throw new ArgumentNullException(nameof(settings));
+            _systemPrompt = _settings.SystemPrompt; // Get system prompt from settings
 
-            if (httpClientFactory == null)
-                throw new ArgumentNullException(nameof(httpClientFactory));
-
-            _apiUrl = settings.ApiGenerateEndpoint;
-            _maxRetries = settings.MaxRetries;
-            _retryDelayMs = settings.RetryDelayMs;
-            _systemPrompt = settings.SystemPrompt;
-
-            // In OllamaModel constructor:
-            _maxConcurrentRequests = settings.MaxConcurrentRequests; // Directly use the setting
-            if (_maxConcurrentRequests <= 0) // Add a check for invalid configuration
-            {
-                _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel", $"Invalid MaxConcurrentRequests ({_maxConcurrentRequests}). Using default value of 3.");
-                _maxConcurrentRequests = 3;
-            }
-            _requestSemaphore = new SemaphoreSlim(_maxConcurrentRequests, _maxConcurrentRequests);
-
-            // Use the HttpClientFactory to create a client
-            _httpClient = httpClientFactory.CreateClient("OllamaApi");
-
-            _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
-                $"Model initialized: {modelName} with HttpClientFactory, max concurrent requests: {_maxConcurrentRequests}");
+            _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Model initialized: {modelName} using IOllamaApiClient");
+            // Removed HttpClientFactory, max concurrent requests log (handled by client)
         }
 
+        // Simplified: Constructs payload and calls API client
         public async Task<string> GenerateResponseAsync(string userInput, string loadedDocument, List<string> chatHistory)
         {
-            _diagnostics.StartOperation("GenerateResponse");
-
+            _diagnostics.StartOperation("Model.GenerateResponse");
             try
             {
-                // Prepare the prompt with context
-                string prompt = userInput;
+                string prompt = ConstructPrompt(userInput, loadedDocument, chatHistory);
 
-                // Add document context if available
-                if (!string.IsNullOrEmpty(loadedDocument))
-                {
-                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
-                        $"Adding document context (length: {loadedDocument.Length} chars)");
-                    prompt = $"Context information:\n{loadedDocument}\n\nQuestion: {userInput}";
-                }
-
-                // Add chat history for context
-                if (chatHistory != null && chatHistory.Count > 0)
-                {
-                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
-                        $"Including {chatHistory.Count} chat history messages for context");
-                }
-
-                // Create the request JSON
+                // Use settings for API options
                 var requestData = new
                 {
                     model = _modelName,
@@ -95,71 +56,52 @@ namespace ollamidesk
                     system = _systemPrompt,
                     options = new
                     {
-                        temperature = 0.7,
+                        temperature = 0.7, // Example options from original code
                         top_p = 0.9
                     },
                     stream = false
                 };
 
-                // Serialize to JSON
-                string jsonContent = JsonSerializer.Serialize(requestData);
 
-                return await SendRequestToOllamaAsync(jsonContent).ConfigureAwait(false);
+                _diagnostics.Log(DiagnosticLevel.Debug, "OllamaModel", $"Calling API Client GenerateAsync for model {_modelName}. Prompt length: {prompt.Length}");
+                // Delegate the actual API call
+                string responseText = await _apiClient.GenerateAsync(requestData, _modelName).ConfigureAwait(false);
+
+                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Response received from API client for model {_modelName}. Length: {responseText.Length}");
+                return responseText;
+
+            }
+            catch (DocumentProcessingException ex) // Catch specific API client errors
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel", $"API Client error generating response: {ex.Message}");
+                // Re-throw or return formatted error message
+                return $"Error communicating with Ollama: {ex.Message}";
             }
             catch (Exception ex)
             {
-                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel", $"Error generating response: {ex.Message}");
-                return $"An error occurred: {ex.Message}";
+                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel", $"Unexpected error in GenerateResponseAsync: {ex.Message}");
+                return $"An unexpected error occurred: {ex.Message}";
             }
             finally
             {
-                _diagnostics.EndOperation("GenerateResponse");
+                _diagnostics.EndOperation("Model.GenerateResponse");
             }
         }
 
+        // Simplified: Constructs payload with context and calls API client
         public async Task<string> GenerateResponseWithContextAsync(string userInput, List<string> chatHistory, List<DocumentChunk> relevantChunks)
         {
-            _diagnostics.StartOperation("GenerateResponseWithContext");
-
+            _diagnostics.StartOperation("Model.GenerateResponseWithContext");
             try
             {
-                var contextBuilder = new StringBuilder();
+                string prompt = ConstructPromptWithContext(userInput, chatHistory, relevantChunks);
 
-                // Add relevant chunks
-                if (relevantChunks != null && relevantChunks.Any())
-                {
-                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
-                        $"Building context with {relevantChunks.Count} chunks");
-
-                    contextBuilder.AppendLine("Context information:");
-
-                    foreach (var chunk in relevantChunks)
-                    {
-                        contextBuilder.AppendLine($"--- From {chunk.Source} ---");
-                        contextBuilder.AppendLine(chunk.Content);
-                        contextBuilder.AppendLine("---");
-                    }
-
-                    contextBuilder.AppendLine("\nQuestion: " + userInput);
-                }
-                else
-                {
-                    _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
-                        "GenerateResponseWithContext called but no relevant chunks provided");
-                    contextBuilder.Append(userInput);
-                }
-
-                // Log the full context being sent
-                string fullContext = contextBuilder.ToString();
-                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
-                    $"Full context length: {fullContext.Length} characters");
-
-                // Create the request
+                // Use settings for API options
                 var requestData = new
                 {
                     model = _modelName,
-                    prompt = fullContext,
-                    system = _systemPrompt,
+                    prompt = prompt,
+                    system = _systemPrompt, // Use the class system prompt
                     options = new
                     {
                         temperature = 0.7,
@@ -168,188 +110,137 @@ namespace ollamidesk
                     stream = false
                 };
 
-                // Serialize to JSON
-                string jsonContent = JsonSerializer.Serialize(requestData);
+                _diagnostics.Log(DiagnosticLevel.Debug, "OllamaModel", $"Calling API Client GenerateAsync for model {_modelName} with context. Prompt length: {prompt.Length}");
+                // Delegate the actual API call
+                string responseText = await _apiClient.GenerateAsync(requestData, _modelName).ConfigureAwait(false);
 
-                return await SendRequestToOllamaAsync(jsonContent).ConfigureAwait(false);
+                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Response received from API client for model {_modelName} with context. Length: {responseText.Length}");
+                return responseText;
+            }
+            catch (DocumentProcessingException ex) // Catch specific API client errors
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel", $"API Client error generating response with context: {ex.Message}");
+                return $"Error communicating with Ollama (with context): {ex.Message}";
             }
             catch (Exception ex)
             {
-                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
-                    $"Error generating response with context: {ex.Message}");
-                return $"An error occurred while processing your question with document context: {ex.Message}";
+                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel", $"Unexpected error in GenerateResponseWithContextAsync: {ex.Message}");
+                return $"An unexpected error occurred while processing with context: {ex.Message}";
             }
             finally
             {
-                _diagnostics.EndOperation("GenerateResponseWithContext");
+                _diagnostics.EndOperation("Model.GenerateResponseWithContext");
             }
         }
 
-        private async Task<string> SendRequestToOllamaAsync(string jsonContent)
+        // Helper to construct the basic prompt
+        private string ConstructPrompt(string userInput, string? loadedDocument, List<string>? chatHistory)
         {
-            _diagnostics.StartOperation("OllamaApiRequest");
+            // This logic remains similar to original, focusing on prompt building
+            var promptBuilder = new StringBuilder();
 
-            // Flag to track if we've acquired the semaphore
-            bool semaphoreAcquired = false;
-
-            try
+            // Add document context if available
+            if (!string.IsNullOrEmpty(loadedDocument))
             {
-                // Throttle concurrent requests using the semaphore
-                await _requestSemaphore.WaitAsync().ConfigureAwait(false);
-                semaphoreAcquired = true;
+                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Adding document context (length: {loadedDocument.Length} chars)");
+                promptBuilder.AppendLine("--- Document Context ---");
+                promptBuilder.AppendLine(loadedDocument);
+                promptBuilder.AppendLine("--- End Context ---");
+                promptBuilder.AppendLine();
+                promptBuilder.AppendLine("Question based on the context above and chat history below:");
+                promptBuilder.AppendLine(userInput);
 
-                var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-                _diagnostics.LogApiRequest("OllamaModel", _apiUrl,
-                    jsonContent.Length > 500 ? jsonContent.Substring(0, 500) + "..." : jsonContent);
+            }
+            else
+            {
+                promptBuilder.AppendLine("Question:");
+                promptBuilder.AppendLine(userInput);
+            }
 
-                for (int attempt = 1; attempt <= _maxRetries; attempt++)
+
+            // Add chat history for context (limited history)
+            if (chatHistory != null && chatHistory.Count > 0)
+            {
+                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Including {chatHistory.Count} chat history messages for context");
+                promptBuilder.AppendLine("\n--- Chat History (Recent first) ---");
+                // Include limited history, e.g., last 5 turns (10 messages)
+                foreach (var message in chatHistory.Take(10).Reverse()) // Take last 10, reverse to show oldest first in prompt context
                 {
-                    try
-                    {
-                        // Send request to the Ollama API
-                        var response = await _httpClient.PostAsync(_apiUrl, content).ConfigureAwait(false);
-
-                        // Check if the request was successful
-                        if (response.IsSuccessStatusCode)
-                        {
-                            // Read and parse JSON response
-                            string jsonResponse = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            _diagnostics.LogApiResponse("OllamaModel", _apiUrl,
-                                jsonResponse.Length > 500 ? jsonResponse.Substring(0, 500) + "..." : jsonResponse,
-                                true);
-
-                            try
-                            {
-                                using var doc = JsonDocument.Parse(jsonResponse);
-                                // Extract just the response text from the JSON
-                                if (doc.RootElement.TryGetProperty("response", out var responseElement))
-                                {
-                                    string responseText = responseElement.GetString() ?? "No response received";
-                                    _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
-                                        $"Response generated successfully (length: {responseText.Length} chars)");
-                                    return responseText;
-                                }
-                                else
-                                {
-                                    _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
-                                        "Unexpected API response format - no 'response' field");
-                                    return "Error: Unexpected API response format";
-                                }
-                            }
-                            catch (JsonException ex)
-                            {
-                                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
-                                    $"Invalid JSON response: {ex.Message}");
-                                return "Error: Invalid JSON response from Ollama API";
-                            }
-                        }
-                        else
-                        {
-                            string errorContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            _diagnostics.LogApiResponse("OllamaModel", _apiUrl, errorContent, false);
-
-                            // Only retry for server errors (5xx)
-                            if ((int)response.StatusCode >= 500 && attempt < _maxRetries)
-                            {
-                                _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
-                                    $"Server error on attempt {attempt}, will retry after delay: {response.StatusCode}");
-                                await Task.Delay(_retryDelayMs * attempt).ConfigureAwait(false);
-                                continue;
-                            }
-
-                            return $"Error: API request failed with status {response.StatusCode}";
-                        }
-                    }
-                    catch (TaskCanceledException)
-                    {
-                        if (attempt < _maxRetries)
-                        {
-                            _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
-                                $"Request timeout on attempt {attempt}, will retry");
-                            await Task.Delay(_retryDelayMs * attempt).ConfigureAwait(false);
-                            continue;
-                        }
-                        return "Error: Request to Ollama API timed out after multiple attempts";
-                    }
-                    catch (Exception ex) when (attempt < _maxRetries)
-                    {
-                        _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel",
-                            $"Error on attempt {attempt}, will retry: {ex.Message}");
-                        await Task.Delay(_retryDelayMs * attempt).ConfigureAwait(false);
-                    }
+                    promptBuilder.AppendLine(message); // Assuming history contains formatted "User: ..." / "Assistant: ..." lines
                 }
+                promptBuilder.AppendLine("--- End History ---");
 
-                return "Error: Failed to get a response from Ollama API after multiple attempts";
             }
-            catch (Exception ex)
-            {
-                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
-                    $"Unhandled exception in SendRequestToOllamaAsync: {ex.Message}");
-                return $"An error occurred: {ex.Message}";
-            }
-            finally
-            {
-                // Release the semaphore only if we acquired it
-                if (semaphoreAcquired)
-                {
-                    _requestSemaphore.Release();
-                }
 
-                _diagnostics.EndOperation("OllamaApiRequest");
-            }
+            return promptBuilder.ToString();
         }
 
-        // Helper method for testing the API connection
+        // Helper to construct the prompt with RAG context
+        private string ConstructPromptWithContext(string userInput, List<string>? chatHistory, List<DocumentChunk> relevantChunks)
+        {
+            // This logic remains similar to original, focusing on prompt building
+            var promptBuilder = new StringBuilder();
+
+            promptBuilder.AppendLine("Use the following context information derived from relevant document sections to answer the query. Focus primarily on the provided context.");
+            promptBuilder.AppendLine("--- Context Chunks ---");
+            if (relevantChunks != null && relevantChunks.Any())
+            {
+                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Building context with {relevantChunks.Count} chunks");
+                foreach (var chunk in relevantChunks)
+                {
+                    promptBuilder.AppendLine($"Source: {chunk.Source} (Chunk {chunk.ChunkIndex})");
+                    // Add section path if available
+                    if (!string.IsNullOrWhiteSpace(chunk.SectionPath))
+                    {
+                        promptBuilder.AppendLine($"Section: {chunk.SectionPath}");
+                    }
+                    promptBuilder.AppendLine("Content:");
+                    promptBuilder.AppendLine(chunk.Content);
+                    promptBuilder.AppendLine("---");
+                }
+            }
+            else
+            {
+                _diagnostics.Log(DiagnosticLevel.Warning, "OllamaModel", "GenerateResponseWithContext called but no relevant chunks provided.");
+                promptBuilder.AppendLine("[No specific document context chunks found]");
+            }
+            promptBuilder.AppendLine("--- End Context Chunks ---");
+            promptBuilder.AppendLine();
+
+
+            // Add chat history for context (limited history)
+            if (chatHistory != null && chatHistory.Count > 0)
+            {
+                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Including {chatHistory.Count} chat history messages for context");
+                promptBuilder.AppendLine("\n--- Chat History (Recent first) ---");
+                // Include limited history, e.g., last 5 turns (10 messages)
+                foreach (var message in chatHistory.Take(10).Reverse())
+                {
+                    promptBuilder.AppendLine(message);
+                }
+                promptBuilder.AppendLine("--- End History ---");
+                promptBuilder.AppendLine();
+            }
+
+
+            promptBuilder.AppendLine("Based on the context and history (if provided), answer the following query:");
+            promptBuilder.AppendLine($"Query: {userInput}");
+
+            string fullContext = promptBuilder.ToString();
+            _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Constructed prompt with context. Length: {fullContext.Length} characters");
+            return fullContext;
+        }
+
+
+        // TestConnection is now delegated to the API client
         public async Task<bool> TestConnectionAsync()
         {
-            _diagnostics.StartOperation("TestModelConnection");
-
-            // Flag to track if we've acquired the semaphore
-            bool semaphoreAcquired = false;
-
-            try
-            {
-                // Use the semaphore for throttling connection tests too
-                await _requestSemaphore.WaitAsync().ConfigureAwait(false);
-                semaphoreAcquired = true;
-
-                // Create a simple request to test connection
-                var requestData = new
-                {
-                    model = _modelName,
-                    prompt = "Hello",
-                    system = "Respond with 'Connected'",
-                    options = new { num_predict = 10 }, // Request a very short response
-                    stream = false
-                };
-
-                string jsonContent = JsonSerializer.Serialize(requestData);
-                var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-
-                var response = await _httpClient.PostAsync(_apiUrl, content).ConfigureAwait(false);
-
-                bool success = response.IsSuccessStatusCode;
-                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel",
-                    $"Connection test result: {(success ? "SUCCESS" : "FAILED")} - Status: {response.StatusCode}");
-
-                return success;
-            }
-            catch (Exception ex)
-            {
-                _diagnostics.Log(DiagnosticLevel.Error, "OllamaModel",
-                    $"Connection test failed with exception: {ex.Message}");
-                return false;
-            }
-            finally
-            {
-                // Release the semaphore only if we acquired it
-                if (semaphoreAcquired)
-                {
-                    _requestSemaphore.Release();
-                }
-
-                _diagnostics.EndOperation("TestModelConnection");
-            }
+            _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Delegating connection test for model {_modelName} to API Client.");
+            return await _apiClient.TestConnectionAsync(_modelName).ConfigureAwait(false);
         }
+
+
+        // --- REMOVED SendRequestToOllamaAsync ---
+        // Logic moved to OllamaApiClient.SendRequestInternalAsync
     }
 }

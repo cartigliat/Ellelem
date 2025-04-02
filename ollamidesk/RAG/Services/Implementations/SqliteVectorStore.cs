@@ -1,673 +1,313 @@
+// ollamidesk/RAG/Services/Implementations/SqliteVectorStore.cs
+// Refactored to use ISqliteConnectionProvider
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Data.SQLite;
-using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
-using System.Collections.Concurrent;
-using ollamidesk.Configuration;
+using ollamidesk.Configuration; // May not be needed directly
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
-using ollamidesk.RAG.Services;
+using ollamidesk.RAG.Services.Interfaces; // Use interfaces
+using System.Data; // Required for CommandBehavior
 
 namespace ollamidesk.RAG.Services
 {
-    public class SqliteVectorStore : IVectorStore, IDisposable
+    public class SqliteVectorStore : IVectorStore
     {
-        private readonly string _dbPath;
+        private readonly ISqliteConnectionProvider _connectionProvider; // Use provider
         private readonly RagDiagnosticsService _diagnostics;
-        private SQLiteConnection? _connection;
-        private bool _isInitialized = false;
-        private bool _disposedValue;
+        // Removed connection, initialization fields, and semaphores - handled by provider
 
-        // Thread safety additions
-        private readonly SemaphoreSlim _connectionSemaphore = new SemaphoreSlim(1, 1);
-        private readonly ConcurrentDictionary<string, SemaphoreSlim> _documentLocks =
-            new ConcurrentDictionary<string, SemaphoreSlim>();
 
-        public SqliteVectorStore(StorageSettings storageSettings, RagDiagnosticsService diagnostics)
+        // Inject the connection provider instead of StorageSettings
+        public SqliteVectorStore(ISqliteConnectionProvider connectionProvider, RagDiagnosticsService diagnostics)
         {
-            if (storageSettings == null)
-                throw new ArgumentNullException(nameof(storageSettings));
-
+            _connectionProvider = connectionProvider ?? throw new ArgumentNullException(nameof(connectionProvider));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
-
-            // Create vectors directory if it doesn't exist
-            string vectorsFolder = storageSettings.VectorsFolder;
-            Directory.CreateDirectory(vectorsFolder);
-
-            // Set up database path
-            _dbPath = Path.Combine(vectorsFolder, "vectors.db");
-
-            _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
-                $"Vector store initialized with database: {_dbPath}");
+            _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore", "Vector store initialized using ISqliteConnectionProvider.");
         }
 
-        // Get a document-specific lock
-        private SemaphoreSlim GetDocumentLock(string documentId)
-        {
-            return _documentLocks.GetOrAdd(documentId, _ => new SemaphoreSlim(1, 1));
-        }
-
-        private async Task EnsureInitializedAsync()
-        {
-            if (_isInitialized)
-                return;
-
-            bool semaphoreAcquired = false;
-            try
-            {
-                await _connectionSemaphore.WaitAsync().ConfigureAwait(false);
-                semaphoreAcquired = true;
-
-                if (_isInitialized)
-                    return;
-
-                // Create the connection string
-                string connectionString = $"Data Source={_dbPath};Version=3;";
-
-                // Create the connection
-                _connection = new SQLiteConnection(connectionString);
-                await _connection.OpenAsync().ConfigureAwait(false);
-
-                // Create tables if they don't exist
-                using (var command = _connection.CreateCommand())
-                {
-                    // Documents table
-                    command.CommandText = @"
-                        CREATE TABLE IF NOT EXISTS Documents (
-                            DocumentId TEXT PRIMARY KEY,
-                            Name TEXT NOT NULL
-                        )";
-                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
-
-                    // Chunks table with vector storage
-                    command.CommandText = @"
-                        CREATE TABLE IF NOT EXISTS Chunks (
-                            ChunkId TEXT PRIMARY KEY,
-                            DocumentId TEXT NOT NULL,
-                            Content TEXT NOT NULL,
-                            ChunkIndex INTEGER NOT NULL,
-                            Source TEXT NOT NULL,
-                            VectorJson TEXT NOT NULL,
-                            FOREIGN KEY (DocumentId) REFERENCES Documents(DocumentId) ON DELETE CASCADE
-                        )";
-                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
-
-                    // Enable foreign keys
-                    command.CommandText = "PRAGMA foreign_keys = ON";
-                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
-
-                    // Create index on DocumentId for faster lookups
-                    command.CommandText = "CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON Chunks(DocumentId)";
-                    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
-                }
-
-                _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore", "Database initialized successfully");
-
-                // Check if we need to migrate data from file-based storage
-                await MigrateFromFileStorageIfNeededAsync().ConfigureAwait(false);
-
-                _isInitialized = true;
-            }
-            catch (Exception ex)
-            {
-                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                    $"Error initializing database: {ex.Message}");
-                throw;
-            }
-            finally
-            {
-                if (semaphoreAcquired)
-                {
-                    _connectionSemaphore.Release();
-                }
-            }
-        }
-
-        private async Task MigrateFromFileStorageIfNeededAsync()
-        {
-            try
-            {
-                // Check if we have existing vector files to migrate
-                string? vectorsFolder = Path.GetDirectoryName(_dbPath);
-                if (string.IsNullOrEmpty(vectorsFolder))
-                    return;
-
-                var vectorFiles = Directory.GetFiles(vectorsFolder, "*.vectors.json");
-                if (vectorFiles.Length == 0)
-                    return;
-
-                _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
-                    $"Found {vectorFiles.Length} vector files to migrate");
-
-                // Check if we have already migrated data
-                if (_connection != null)
-                {
-                    using (var command = _connection.CreateCommand())
-                    {
-                        command.CommandText = "SELECT COUNT(*) FROM Chunks";
-                        int count = Convert.ToInt32(await command.ExecuteScalarAsync().ConfigureAwait(false));
-
-                        if (count > 0)
-                        {
-                            _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
-                                "Database already contains vectors, skipping migration");
-                            return;
-                        }
-                    }
-                }
-                else
-                {
-                    _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                        "Connection is null during migration");
-                    return;
-                }
-
-                _diagnostics.StartOperation("MigrateVectors");
-
-                // Migrate each file
-                foreach (var file in vectorFiles)
-                {
-                    try
-                    {
-                        string json = await File.ReadAllTextAsync(file).ConfigureAwait(false);
-                        var chunks = JsonSerializer.Deserialize<List<DocumentChunk>>(json);
-
-                        if (chunks == null || chunks.Count == 0)
-                            continue;
-
-                        // Get document ID from the first chunk
-                        string documentId = chunks[0].DocumentId;
-
-                        // Add document
-                        using (var command = _connection.CreateCommand())
-                        {
-                            command.CommandText = @"
-                                INSERT OR IGNORE INTO Documents (DocumentId, Name) 
-                                VALUES (@DocumentId, @Name)";
-                            command.Parameters.AddWithValue("@DocumentId", documentId);
-                            command.Parameters.AddWithValue("@Name", Path.GetFileNameWithoutExtension(file));
-                            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
-                        }
-
-                        // Add chunks
-                        await AddVectorsInternalAsync(chunks).ConfigureAwait(false);
-
-                        _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
-                            $"Migrated {chunks.Count} vectors from file: {Path.GetFileName(file)}");
-                    }
-                    catch (Exception ex)
-                    {
-                        _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                            $"Error migrating file {Path.GetFileName(file)}: {ex.Message}");
-                    }
-                }
-
-                _diagnostics.EndOperation("MigrateVectors");
-                _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore", "Vector migration completed");
-            }
-            catch (Exception ex)
-            {
-                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                    $"Error during migration: {ex.Message}");
-            }
-        }
+        // Removed EnsureInitializedAsync and MigrateFromFileStorageIfNeededAsync
+        // Initialization is now handled by calling _connectionProvider.InitializeDatabaseAsync() at startup (via DI setup maybe)
 
         public async Task AddVectorsAsync(List<DocumentChunk> chunks)
         {
-            if (chunks == null || chunks.Count == 0)
-                return;
+            if (chunks == null || chunks.Count == 0) return;
 
-            await EnsureInitializedAsync().ConfigureAwait(false);
-            _diagnostics.StartOperation("AddVectors");
+            _diagnostics.StartOperation("Store.AddVectors");
+            SQLiteConnection connection = await _connectionProvider.GetConnectionAsync().ConfigureAwait(false);
 
-            try
+            // Group by document for efficient transaction handling
+            var docGroups = chunks.GroupBy(c => c.DocumentId);
+
+            foreach (var group in docGroups)
             {
-                // Group chunks by document ID
-                var docGroups = chunks.GroupBy(c => c.DocumentId);
+                string documentId = group.Key;
+                string documentName = group.First().Source ?? documentId; // Get name from first chunk or use ID
 
-                foreach (var group in docGroups)
+                using (var transaction = connection.BeginTransaction())
                 {
-                    string documentId = group.Key;
-                    var documentLock = GetDocumentLock(documentId);
-                    bool lockAcquired = false;
-
-                    // Acquire lock for this specific document
                     try
                     {
-                        await documentLock.WaitAsync().ConfigureAwait(false);
-                        lockAcquired = true;
-
-                        // Add or update document entry
-                        if (_connection != null)
+                        // 1. Add/Update Document Entry
+                        using (var cmdDoc = connection.CreateCommand())
                         {
-                            using (var command = _connection.CreateCommand())
+                            cmdDoc.Transaction = transaction;
+                            cmdDoc.CommandText = "INSERT OR REPLACE INTO Documents (DocumentId, Name) VALUES (@DocumentId, @Name)";
+                            cmdDoc.Parameters.AddWithValue("@DocumentId", documentId);
+                            cmdDoc.Parameters.AddWithValue("@Name", documentName);
+                            await cmdDoc.ExecuteNonQueryAsync().ConfigureAwait(false);
+                        }
+
+                        // 2. Delete existing chunks for this document to prevent duplicates/orphans
+                        using (var cmdDelete = connection.CreateCommand())
+                        {
+                            cmdDelete.Transaction = transaction;
+                            cmdDelete.CommandText = "DELETE FROM Chunks WHERE DocumentId = @DocumentId";
+                            cmdDelete.Parameters.AddWithValue("@DocumentId", documentId);
+                            int deletedRows = await cmdDelete.ExecuteNonQueryAsync().ConfigureAwait(false);
+                            if (deletedRows > 0)
                             {
-                                command.CommandText = @"
-                                    INSERT OR REPLACE INTO Documents (DocumentId, Name) 
-                                    VALUES (@DocumentId, @Name)";
-                                command.Parameters.AddWithValue("@DocumentId", documentId);
-                                command.Parameters.AddWithValue("@Name", group.First().Source);
-                                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+                                _diagnostics.Log(DiagnosticLevel.Debug, "SqliteVectorStore", $"Deleted {deletedRows} existing chunks for document {documentId} before adding new ones.");
                             }
                         }
 
-                        // Add chunks
-                        await AddVectorsInternalAsync(group.ToList()).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        if (lockAcquired)
+                        // 3. Insert new chunks
+                        using (var cmdChunk = connection.CreateCommand())
                         {
-                            documentLock.Release();
+                            cmdChunk.Transaction = transaction;
+                            cmdChunk.CommandText = @"
+                                INSERT INTO Chunks (ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson)
+                                VALUES (@ChunkId, @DocumentId, @Content, @ChunkIndex, @Source, @VectorJson)";
+
+                            // Prepare parameters once
+                            cmdChunk.Parameters.Add(new SQLiteParameter("@ChunkId", DbType.String));
+                            cmdChunk.Parameters.Add(new SQLiteParameter("@DocumentId", DbType.String) { Value = documentId }); // Set once per doc
+                            cmdChunk.Parameters.Add(new SQLiteParameter("@Content", DbType.String));
+                            cmdChunk.Parameters.Add(new SQLiteParameter("@ChunkIndex", DbType.Int32));
+                            cmdChunk.Parameters.Add(new SQLiteParameter("@Source", DbType.String));
+                            cmdChunk.Parameters.Add(new SQLiteParameter("@VectorJson", DbType.String)); // Or DbType.Blob if using BLOB
+
+
+                            foreach (var chunk in group)
+                            {
+                                if (chunk.Embedding == null || chunk.Embedding.Length == 0)
+                                {
+                                    _diagnostics.Log(DiagnosticLevel.Warning, "SqliteVectorStore", $"Skipping chunk {chunk.Id} for document {documentId} due to missing embedding.");
+                                    continue;
+                                }
+
+                                string vectorJson = JsonSerializer.Serialize(chunk.Embedding);
+
+                                cmdChunk.Parameters["@ChunkId"].Value = chunk.Id ?? Guid.NewGuid().ToString(); // Ensure ID
+                                cmdChunk.Parameters["@Content"].Value = chunk.Content;
+                                cmdChunk.Parameters["@ChunkIndex"].Value = chunk.ChunkIndex;
+                                cmdChunk.Parameters["@Source"].Value = chunk.Source ?? documentName;
+                                cmdChunk.Parameters["@VectorJson"].Value = vectorJson; // Store as JSON string
+
+                                await cmdChunk.ExecuteNonQueryAsync().ConfigureAwait(false);
+                            }
                         }
+
+                        transaction.Commit();
+                        _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore", $"Successfully added/updated {group.Count()} vectors for document {documentId}.");
                     }
-                }
-
-                _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
-                    $"Added {chunks.Count} vectors for {docGroups.Count()} documents");
-            }
-            catch (Exception ex)
-            {
-                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                    $"Error adding vectors: {ex.Message}");
-                throw;
-            }
-            finally
-            {
-                _diagnostics.EndOperation("AddVectors");
-            }
-        }
-
-        private async Task AddVectorsInternalAsync(List<DocumentChunk> chunks)
-        {
-            if (chunks == null || chunks.Count == 0 || _connection == null)
-                return;
-
-            // First remove any existing chunks for this document to avoid duplicates
-            string documentId = chunks[0].DocumentId;
-            using (var command = _connection.CreateCommand())
-            {
-                command.CommandText = "DELETE FROM Chunks WHERE DocumentId = @DocumentId";
-                command.Parameters.AddWithValue("@DocumentId", documentId);
-                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
-            }
-
-            // Use a transaction for better performance
-            using (var transaction = _connection.BeginTransaction())
-            {
-                try
-                {
-                    using (var command = _connection.CreateCommand())
+                    catch (Exception ex)
                     {
-                        command.Transaction = transaction;
-                        command.CommandText = @"
-                            INSERT INTO Chunks (ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson)
-                            VALUES (@ChunkId, @DocumentId, @Content, @ChunkIndex, @Source, @VectorJson)";
-
-                        // Create parameters once
-                        var pChunkId = command.CreateParameter();
-                        pChunkId.ParameterName = "@ChunkId";
-                        command.Parameters.Add(pChunkId);
-
-                        var pDocumentId = command.CreateParameter();
-                        pDocumentId.ParameterName = "@DocumentId";
-                        command.Parameters.Add(pDocumentId);
-
-                        var pContent = command.CreateParameter();
-                        pContent.ParameterName = "@Content";
-                        command.Parameters.Add(pContent);
-
-                        var pChunkIndex = command.CreateParameter();
-                        pChunkIndex.ParameterName = "@ChunkIndex";
-                        command.Parameters.Add(pChunkIndex);
-
-                        var pSource = command.CreateParameter();
-                        pSource.ParameterName = "@Source";
-                        command.Parameters.Add(pSource);
-
-                        var pVectorJson = command.CreateParameter();
-                        pVectorJson.ParameterName = "@VectorJson";
-                        command.Parameters.Add(pVectorJson);
-
-                        // Add each chunk
-                        foreach (var chunk in chunks)
-                        {
-                            // Serialize the vector to JSON
-                            string vectorJson = JsonSerializer.Serialize(chunk.Embedding);
-
-                            // Set parameter values
-                            pChunkId.Value = chunk.Id;
-                            pDocumentId.Value = chunk.DocumentId;
-                            pContent.Value = chunk.Content;
-                            pChunkIndex.Value = chunk.ChunkIndex;
-                            pSource.Value = chunk.Source;
-                            pVectorJson.Value = vectorJson;
-
-                            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
-                        }
+                        transaction.Rollback();
+                        _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore", $"Error adding vectors for document {documentId} (rolled back): {ex.Message}");
+                        throw; // Re-throw error after rollback
                     }
+                } // End transaction
+            } // End foreach group
 
-                    transaction.Commit();
-                }
-                catch
-                {
-                    transaction.Rollback();
-                    throw;
-                }
-            }
+            _diagnostics.EndOperation("Store.AddVectors");
         }
 
         public async Task RemoveVectorsAsync(string documentId)
         {
-            if (string.IsNullOrEmpty(documentId))
-                return;
+            if (string.IsNullOrEmpty(documentId)) return;
+            _diagnostics.StartOperation("Store.RemoveVectors");
+            SQLiteConnection connection = await _connectionProvider.GetConnectionAsync().ConfigureAwait(false);
 
-            await EnsureInitializedAsync().ConfigureAwait(false);
-            _diagnostics.StartOperation("RemoveVectors");
-
-            try
+            using (var transaction = connection.BeginTransaction())
             {
-                if (_connection == null)
-                {
-                    _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                        "Connection is null when trying to remove vectors");
-                    return;
-                }
-
-                // Acquire document-specific lock
-                var documentLock = GetDocumentLock(documentId);
-                bool lockAcquired = false;
-
                 try
                 {
-                    await documentLock.WaitAsync().ConfigureAwait(false);
-                    lockAcquired = true;
-
-                    // First count how many chunks will be removed
-                    int chunksToRemove = 0;
-                    using (var command = _connection.CreateCommand())
+                    int deletedChunks = 0;
+                    // Delete chunks first due to foreign key constraint
+                    using (var cmdChunks = connection.CreateCommand())
                     {
-                        command.CommandText = "SELECT COUNT(*) FROM Chunks WHERE DocumentId = @DocumentId";
-                        command.Parameters.AddWithValue("@DocumentId", documentId);
-                        chunksToRemove = Convert.ToInt32(await command.ExecuteScalarAsync().ConfigureAwait(false));
+                        cmdChunks.Transaction = transaction;
+                        cmdChunks.CommandText = "DELETE FROM Chunks WHERE DocumentId = @DocumentId";
+                        cmdChunks.Parameters.AddWithValue("@DocumentId", documentId);
+                        deletedChunks = await cmdChunks.ExecuteNonQueryAsync().ConfigureAwait(false);
                     }
-
-                    // Use a transaction for both operations
-                    using (var transaction = _connection.BeginTransaction())
+                    // Delete document entry
+                    using (var cmdDoc = connection.CreateCommand())
                     {
-                        try
-                        {
-                            // Delete chunks
-                            using (var command = _connection.CreateCommand())
-                            {
-                                command.Transaction = transaction;
-                                command.CommandText = "DELETE FROM Chunks WHERE DocumentId = @DocumentId";
-                                command.Parameters.AddWithValue("@DocumentId", documentId);
-                                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
-                            }
-
-                            // Delete document
-                            using (var command = _connection.CreateCommand())
-                            {
-                                command.Transaction = transaction;
-                                command.CommandText = "DELETE FROM Documents WHERE DocumentId = @DocumentId";
-                                command.Parameters.AddWithValue("@DocumentId", documentId);
-                                await command.ExecuteNonQueryAsync().ConfigureAwait(false);
-                            }
-
-                            transaction.Commit();
-                        }
-                        catch
-                        {
-                            transaction.Rollback();
-                            throw;
-                        }
+                        cmdDoc.Transaction = transaction;
+                        cmdDoc.CommandText = "DELETE FROM Documents WHERE DocumentId = @DocumentId";
+                        cmdDoc.Parameters.AddWithValue("@DocumentId", documentId);
+                        await cmdDoc.ExecuteNonQueryAsync().ConfigureAwait(false);
                     }
-
-                    _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore",
-                        $"Removed {chunksToRemove} vectors for document {documentId}");
+                    transaction.Commit();
+                    _diagnostics.Log(DiagnosticLevel.Info, "SqliteVectorStore", $"Removed document {documentId} and {deletedChunks} associated chunks.");
                 }
-                finally
+                catch (Exception ex)
                 {
-                    if (lockAcquired)
-                    {
-                        documentLock.Release();
-                    }
+                    transaction.Rollback();
+                    _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore", $"Error removing vectors for document {documentId} (rolled back): {ex.Message}");
+                    throw;
                 }
             }
-            catch (Exception ex)
-            {
-                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                    $"Error removing vectors: {ex.Message}");
-                throw;
-            }
-            finally
-            {
-                _diagnostics.EndOperation("RemoveVectors");
-            }
+            _diagnostics.EndOperation("Store.RemoveVectors");
         }
 
+        // Search methods now get connection from provider and handle deserialization here
         public async Task<List<(DocumentChunk Chunk, float Score)>> SearchAsync(float[] queryVector, int limit = 5)
         {
-            if (queryVector == null || queryVector.Length == 0)
-                return new List<(DocumentChunk, float)>();
+            if (queryVector == null || queryVector.Length == 0) return new List<(DocumentChunk, float)>();
 
-            await EnsureInitializedAsync().ConfigureAwait(false);
-            _diagnostics.StartOperation("VectorSearch");
+            _diagnostics.StartOperation("Store.Search");
+            var results = new List<(DocumentChunk Chunk, float Score)>();
+            SQLiteConnection connection = await _connectionProvider.GetConnectionAsync().ConfigureAwait(false);
 
             try
             {
-                var results = new List<(DocumentChunk, float)>();
-
-                if (_connection == null)
+                using (var command = connection.CreateCommand())
                 {
-                    _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                        "Connection is null during search");
-                    return results;
-                }
-
-                // We don't need a document-specific lock here since we're just reading
-                // and SQLite handles read concurrency
-
-                // Get all chunks and calculate similarity in memory
-                using (var command = _connection.CreateCommand())
-                {
+                    // Select necessary fields including the VectorJson
                     command.CommandText = "SELECT ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson FROM Chunks";
 
-                    using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
+                    using (var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess).ConfigureAwait(false))
                     {
                         while (await reader.ReadAsync().ConfigureAwait(false))
                         {
-                            // Create chunk
-                            var chunk = new DocumentChunk
-                            {
-                                Id = reader.GetString(0),
-                                DocumentId = reader.GetString(1),
-                                Content = reader.GetString(2),
-                                ChunkIndex = reader.GetInt32(3),
-                                Source = reader.GetString(4)
-                            };
-
-                            // Deserialize vector
                             string vectorJson = reader.GetString(5);
                             float[]? chunkEmbedding = JsonSerializer.Deserialize<float[]>(vectorJson);
-                            chunk.Embedding = chunkEmbedding ?? Array.Empty<float>();
 
-                            // Calculate similarity score
-                            float score = CosineSimilarity(queryVector, chunk.Embedding);
-
-                            // Add to results
-                            results.Add((chunk, score));
+                            if (chunkEmbedding != null && chunkEmbedding.Length > 0)
+                            {
+                                float score = CosineSimilarity(queryVector, chunkEmbedding);
+                                results.Add((new DocumentChunk
+                                {
+                                    Id = reader.GetString(0),
+                                    DocumentId = reader.GetString(1),
+                                    Content = reader.GetString(2),
+                                    ChunkIndex = reader.GetInt32(3),
+                                    Source = reader.GetString(4),
+                                    Embedding = chunkEmbedding // Keep embedding in chunk if needed later
+                                }, score));
+                            }
                         }
                     }
                 }
 
-                // Sort and limit results
-                results = results
-                    .OrderByDescending(x => x.Item2)
-                    .Take(limit)
-                    .ToList();
-
-                _diagnostics.Log(DiagnosticLevel.Debug, "SqliteVectorStore",
-                    $"Search returned {results.Count} results with top score of {(results.Count > 0 ? results[0].Item2.ToString("F4") : "N/A")}");
-
-                return results;
+                // Sort and limit in memory
+                results = results.OrderByDescending(x => x.Score).Take(limit).ToList();
+                _diagnostics.Log(DiagnosticLevel.Debug, "SqliteVectorStore", $"Search returned {results.Count} results. Top score: {(results.Count > 0 ? results[0].Score.ToString("F4") : "N/A")}");
             }
             catch (Exception ex)
             {
-                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                    $"Error during vector search: {ex.Message}");
+                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore", $"Error during vector search: {ex.Message}");
                 throw;
             }
             finally
             {
-                _diagnostics.EndOperation("VectorSearch");
+                _diagnostics.EndOperation("Store.Search");
             }
+            return results;
         }
 
         public async Task<List<(DocumentChunk Chunk, float Score)>> SearchInDocumentsAsync(
-            float[] queryVector,
-            List<string> documentIds,
-            int limit = 5)
+           float[] queryVector, List<string> documentIds, int limit = 5)
         {
             if (queryVector == null || queryVector.Length == 0 || documentIds == null || documentIds.Count == 0)
                 return new List<(DocumentChunk, float)>();
 
-            await EnsureInitializedAsync().ConfigureAwait(false);
-            _diagnostics.StartOperation("VectorSearchInDocuments");
+            _diagnostics.StartOperation("Store.SearchInDocuments");
+            var results = new List<(DocumentChunk Chunk, float Score)>();
+            SQLiteConnection connection = await _connectionProvider.GetConnectionAsync().ConfigureAwait(false);
 
             try
             {
-                var results = new List<(DocumentChunk, float)>();
+                // Use parameterized query for document IDs
+                var parameters = documentIds.Select((id, index) => $"@p{index}").ToArray();
+                string docIdPlaceholders = string.Join(",", parameters);
 
-                if (_connection == null)
+
+                using (var command = connection.CreateCommand())
                 {
-                    _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                        "Connection is null during search");
-                    return results;
-                }
+                    command.CommandText = $"SELECT ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson FROM Chunks WHERE DocumentId IN ({docIdPlaceholders})";
+                    // Add parameters
+                    for (int i = 0; i < documentIds.Count; i++)
+                    {
+                        command.Parameters.AddWithValue(parameters[i], documentIds[i]);
+                    }
 
-                // We don't need document-specific locks here since we're just reading
-                // and SQLite handles read concurrency
-
-                // Build document IDs parameter for SQL query
-                string documentIdsParam = string.Join(",", documentIds.Select(id => $"'{id}'"));
-
-                // Get chunks only from the specified documents
-                using (var command = _connection.CreateCommand())
-                {
-                    command.CommandText = $"SELECT ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson FROM Chunks WHERE DocumentId IN ({documentIdsParam})";
-
-                    using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
+                    using (var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess).ConfigureAwait(false))
                     {
                         while (await reader.ReadAsync().ConfigureAwait(false))
                         {
-                            // Create chunk
-                            var chunk = new DocumentChunk
-                            {
-                                Id = reader.GetString(0),
-                                DocumentId = reader.GetString(1),
-                                Content = reader.GetString(2),
-                                ChunkIndex = reader.GetInt32(3),
-                                Source = reader.GetString(4)
-                            };
-
-                            // Deserialize vector
                             string vectorJson = reader.GetString(5);
                             float[]? chunkEmbedding = JsonSerializer.Deserialize<float[]>(vectorJson);
-                            chunk.Embedding = chunkEmbedding ?? Array.Empty<float>();
 
-                            // Calculate similarity score
-                            float score = CosineSimilarity(queryVector, chunk.Embedding);
-
-                            // Add to results
-                            results.Add((chunk, score));
+                            if (chunkEmbedding != null && chunkEmbedding.Length > 0)
+                            {
+                                float score = CosineSimilarity(queryVector, chunkEmbedding);
+                                results.Add((new DocumentChunk
+                                {
+                                    Id = reader.GetString(0),
+                                    DocumentId = reader.GetString(1),
+                                    Content = reader.GetString(2),
+                                    ChunkIndex = reader.GetInt32(3),
+                                    Source = reader.GetString(4),
+                                    Embedding = chunkEmbedding
+                                }, score));
+                            }
                         }
                     }
                 }
 
-                // Sort and limit results
-                results = results
-                    .OrderByDescending(x => x.Item2)
-                    .Take(limit)
-                    .ToList();
+                results = results.OrderByDescending(x => x.Score).Take(limit).ToList();
+                _diagnostics.Log(DiagnosticLevel.Debug, "SqliteVectorStore", $"Document-filtered search returned {results.Count} results from {documentIds.Count} documents. Top score: {(results.Count > 0 ? results[0].Score.ToString("F4") : "N/A")}");
 
-                _diagnostics.Log(DiagnosticLevel.Debug, "SqliteVectorStore",
-                    $"Document-first search returned {results.Count} results from {documentIds.Count} documents with top score of {(results.Count > 0 ? results[0].Item2.ToString("F4") : "N/A")}");
-
-                return results;
             }
             catch (Exception ex)
             {
-                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore",
-                    $"Error during document-filtered vector search: {ex.Message}");
+                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore", $"Error during document-filtered vector search: {ex.Message}");
                 throw;
             }
             finally
             {
-                _diagnostics.EndOperation("VectorSearchInDocuments");
+                _diagnostics.EndOperation("Store.SearchInDocuments");
             }
+            return results;
         }
 
-        private float CosineSimilarity(float[] v1, float[]? v2)
+
+        // CosineSimilarity is a stateless utility function, keep it here.
+        private float CosineSimilarity(float[] v1, float[] v2)
         {
-            if (v1 == null || v2 == null || v1.Length != v2.Length || v1.Length == 0)
-                return 0;
-
-            float dotProduct = 0;
-            float magnitude1 = 0;
-            float magnitude2 = 0;
-
+            if (v1 == null || v2 == null || v1.Length != v2.Length || v1.Length == 0) return 0;
+            double dotProduct = 0.0;
+            double magnitude1 = 0.0;
+            double magnitude2 = 0.0;
             for (int i = 0; i < v1.Length; i++)
             {
                 dotProduct += v1[i] * v2[i];
                 magnitude1 += v1[i] * v1[i];
                 magnitude2 += v2[i] * v2[i];
             }
-
-            magnitude1 = (float)Math.Sqrt(magnitude1);
-            magnitude2 = (float)Math.Sqrt(magnitude2);
-
-            if (magnitude1 == 0 || magnitude2 == 0)
-                return 0;
-
-            return dotProduct / (magnitude1 * magnitude2);
+            magnitude1 = Math.Sqrt(magnitude1);
+            magnitude2 = Math.Sqrt(magnitude2);
+            if (magnitude1 == 0 || magnitude2 == 0) return 0;
+            return (float)(dotProduct / (magnitude1 * magnitude2));
         }
 
-        #region IDisposable
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!_disposedValue)
-            {
-                if (disposing)
-                {
-                    // Dispose managed resources
-                    _connection?.Close();
-                    _connection?.Dispose();
-                    _connectionSemaphore?.Dispose();
-
-                    // Dispose all document locks
-                    foreach (var documentLock in _documentLocks.Values)
-                    {
-                        documentLock?.Dispose();
-                    }
-                    _documentLocks.Clear();
-                }
-
-                _disposedValue = true;
-            }
-        }
-
-        public void Dispose()
-        {
-            Dispose(disposing: true);
-            GC.SuppressFinalize(this);
-        }
-        #endregion
+        // Removed Dispose method - connection lifecycle managed by SqliteConnectionProvider
     }
 }

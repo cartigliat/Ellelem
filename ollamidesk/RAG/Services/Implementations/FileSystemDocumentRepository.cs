@@ -1,583 +1,267 @@
+// ollamidesk/RAG/Services/Implementations/FileSystemDocumentRepository.cs
+// Refactored to use IMetadataStore and IContentStore
 using System;
 using System.Collections.Generic;
-using System.Collections.Concurrent;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
-using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services.Interfaces;
+using ollamidesk.RAG.Exceptions; // Added for exceptions
+
 
 namespace ollamidesk.RAG.Services.Implementations
 {
-    public class FileSystemDocumentRepository : IDocumentRepository, IDisposable
+    /// <summary>
+    /// Implements IDocumentRepository by coordinating metadata and content storage providers.
+    /// </summary>
+    public class FileSystemDocumentRepository : IDocumentRepository
     {
-        private readonly string _basePath;
-        private readonly string _metadataFile;
-        private readonly string _documentsFolder;
-        private readonly string _embeddingsFolder;
-        private readonly Dictionary<string, Document> _documentsCache = new();
+        private readonly IMetadataStore _metadataStore;
+        private readonly IContentStore _contentStore;
         private readonly RagDiagnosticsService _diagnostics;
-        private bool _isInitialized = false;
 
-        // Thread safety additions
-        private readonly SemaphoreSlim _initializationLock = new SemaphoreSlim(1, 1);
-        private readonly SemaphoreSlim _cacheLock = new SemaphoreSlim(1, 1);
-        private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileSpecificLocks =
-            new ConcurrentDictionary<string, SemaphoreSlim>();
-
-        public FileSystemDocumentRepository(StorageSettings storageSettings, RagDiagnosticsService diagnostics)
+        public FileSystemDocumentRepository(
+            IMetadataStore metadataStore,
+            IContentStore contentStore,
+            RagDiagnosticsService diagnostics)
         {
-            if (storageSettings == null)
-                throw new ArgumentNullException(nameof(storageSettings));
-
+            _metadataStore = metadataStore ?? throw new ArgumentNullException(nameof(metadataStore));
+            _contentStore = contentStore ?? throw new ArgumentNullException(nameof(contentStore));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
-            _basePath = storageSettings.BasePath;
-            _metadataFile = storageSettings.MetadataFile;
-            _documentsFolder = storageSettings.DocumentsFolder;
-            _embeddingsFolder = storageSettings.EmbeddingsFolder;
-
-            Directory.CreateDirectory(_basePath);
-            Directory.CreateDirectory(_documentsFolder);
-            Directory.CreateDirectory(_embeddingsFolder);
-
-            _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
-                $"Repository initialized with base path: {_basePath}");
+            _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", "Repository initialized, coordinating metadata and content stores.");
         }
 
-        // Helper to get or create a lock for a specific file
-        private SemaphoreSlim GetFileLock(string filePath)
+        // Converts metadata to a basic Document object (without content/chunks)
+        private Document ConvertMetadataToDocument(DocumentMetadata meta)
         {
-            return _fileSpecificLocks.GetOrAdd(filePath, _ => new SemaphoreSlim(1, 1));
-        }
-
-        private async Task EnsureInitializedAsync()
-        {
-            if (_isInitialized)
-                return;
-
-            bool lockAcquired = false;
-            try
+            return new Document
             {
-                await _initializationLock.WaitAsync().ConfigureAwait(false);
-                lockAcquired = true;
-
-                if (_isInitialized)
-                    return;
-
-                if (File.Exists(_metadataFile))
-                {
-                    try
-                    {
-                        // Get file lock for reading
-                        var fileLock = GetFileLock(_metadataFile);
-                        bool fileLockAcquired = false;
-                        try
-                        {
-                            await fileLock.WaitAsync().ConfigureAwait(false);
-                            fileLockAcquired = true;
-
-                            string json = await File.ReadAllTextAsync(_metadataFile).ConfigureAwait(false);
-                            var documents = JsonSerializer.Deserialize<List<Document>>(json);
-
-                            if (documents != null)
-                            {
-                                bool cacheLockAcquired = false;
-                                try
-                                {
-                                    await _cacheLock.WaitAsync().ConfigureAwait(false);
-                                    cacheLockAcquired = true;
-
-                                    _documentsCache.Clear();
-                                    foreach (var doc in documents)
-                                    {
-                                        // We now always store full content
-                                        _documentsCache[doc.Id] = doc;
-                                    }
-                                }
-                                finally
-                                {
-                                    if (cacheLockAcquired)
-                                    {
-                                        _cacheLock.Release();
-                                    }
-                                }
-                            }
-                        }
-                        finally
-                        {
-                            if (fileLockAcquired)
-                            {
-                                fileLock.Release();
-                            }
-                        }
-
-                        _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
-                            $"Loaded {_documentsCache.Count} documents from metadata file");
-                    }
-                    catch (Exception ex)
-                    {
-                        _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
-                            $"Error loading document metadata: {ex.Message}");
-                        // If we can't read the file, start with an empty cache
-                    }
-                }
-
-                _isInitialized = true;
-            }
-            finally
-            {
-                if (lockAcquired)
-                {
-                    _initializationLock.Release();
-                }
-            }
-        }
-
-        private async Task SaveMetadataAsync()
-        {
-            try
-            {
-                List<Document> documentsToSave;
-
-                bool cacheLockAcquired = false;
-                try
-                {
-                    await _cacheLock.WaitAsync().ConfigureAwait(false);
-                    cacheLockAcquired = true;
-
-                    // Clone documents for serialization
-                    documentsToSave = _documentsCache.Values.Select(doc =>
-                    {
-                        // Create a shallow copy
-                        var docCopy = new Document
-                        {
-                            Id = doc.Id,
-                            Name = doc.Name,
-                            FilePath = doc.FilePath,
-                            DateAdded = doc.DateAdded,
-                            IsProcessed = doc.IsProcessed,
-                            IsSelected = doc.IsSelected,
-                            FileSize = doc.FileSize,
-                            DocumentType = doc.DocumentType
-                        };
-
-                        // Always include content
-                        docCopy.Content = doc.Content;
-
-                        return docCopy;
-                    }).ToList();
-                }
-                finally
-                {
-                    if (cacheLockAcquired)
-                    {
-                        _cacheLock.Release();
-                    }
-                }
-
-                string json = JsonSerializer.Serialize(documentsToSave);
-
-                // Get file lock for writing
-                var fileLock = GetFileLock(_metadataFile);
-                bool fileLockAcquired = false;
-                try
-                {
-                    await fileLock.WaitAsync().ConfigureAwait(false);
-                    fileLockAcquired = true;
-
-                    await File.WriteAllTextAsync(_metadataFile, json).ConfigureAwait(false);
-                }
-                finally
-                {
-                    if (fileLockAcquired)
-                    {
-                        fileLock.Release();
-                    }
-                }
-
-                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
-                    "Metadata saved successfully");
-            }
-            catch (Exception ex)
-            {
-                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
-                    $"Error saving metadata: {ex.Message}");
-            }
+                Id = meta.Id,
+                Name = meta.Name,
+                FilePath = meta.FilePath,
+                DateAdded = meta.DateAdded,
+                IsProcessed = meta.IsProcessed,
+                IsSelected = meta.IsSelected,
+                FileSize = meta.FileSize,
+                DocumentType = meta.DocumentType,
+                // Content and Chunks are not loaded by default
+            };
         }
 
         public async Task<List<Document>> GetAllDocumentsAsync()
         {
-            await EnsureInitializedAsync().ConfigureAwait(false);
-
-            bool lockAcquired = false;
+            _diagnostics.StartOperation("Repo.GetAllDocuments");
             try
             {
-                await _cacheLock.WaitAsync().ConfigureAwait(false);
-                lockAcquired = true;
-
-                return _documentsCache.Values.ToList();
+                var allMetadata = await _metadataStore.LoadMetadataAsync().ConfigureAwait(false);
+                var documents = allMetadata.Values
+                    .Select(ConvertMetadataToDocument)
+                    .ToList();
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Retrieved {documents.Count} documents (metadata only).");
+                return documents;
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Error getting all documents: {ex.Message}");
+                throw; // Re-throw for higher layers to handle
             }
             finally
             {
-                if (lockAcquired)
-                {
-                    _cacheLock.Release();
-                }
+                _diagnostics.EndOperation("Repo.GetAllDocuments");
             }
         }
 
         public async Task<Document> GetDocumentByIdAsync(string id)
         {
-            await EnsureInitializedAsync().ConfigureAwait(false);
-
-            bool lockAcquired = false;
+            _diagnostics.StartOperation("Repo.GetDocumentById");
             try
             {
-                await _cacheLock.WaitAsync().ConfigureAwait(false);
-                lockAcquired = true;
-
-                if (_documentsCache.TryGetValue(id, out var document))
+                var metadata = await _metadataStore.GetMetadataByIdAsync(id).ConfigureAwait(false);
+                if (metadata == null)
                 {
-                    return document;
+                    _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository", $"Document metadata not found for ID {id}");
+                    throw new KeyNotFoundException($"Document with ID {id} not found.");
                 }
-            }
-            finally
-            {
-                if (lockAcquired)
-                {
-                    _cacheLock.Release();
-                }
-            }
-
-            _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
-                $"Document with ID {id} not found");
-            throw new KeyNotFoundException($"Document with ID {id} not found");
-        }
-
-        public async Task<Document> LoadFullContentAsync(string documentId)
-        {
-            await EnsureInitializedAsync().ConfigureAwait(false);
-
-            Document? document = null;
-            bool lockAcquired = false;
-            try
-            {
-                await _cacheLock.WaitAsync().ConfigureAwait(false);
-                lockAcquired = true;
-
-                if (!_documentsCache.TryGetValue(documentId, out var docRef))
-                {
-                    throw new KeyNotFoundException($"Document with ID {documentId} not found");
-                }
-                document = docRef;
-            }
-            finally
-            {
-                if (lockAcquired)
-                {
-                    _cacheLock.Release();
-                }
-            }
-
-            // Check for null after lock is released
-            if (document == null)
-            {
-                throw new InvalidOperationException($"Document with ID {documentId} was unexpectedly null after retrieval");
-            }
-
-            try
-            {
-                _diagnostics.StartOperation("LoadFullDocumentContent");
-
-                if (!File.Exists(document.FilePath))
-                {
-                    _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
-                        $"Document file not found: {document.FilePath}");
-                    throw new FileNotFoundException($"Document file not found: {document.FilePath}");
-                }
-
-                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
-                    $"Loading full content for document: {document.Id}, size: {document.FileSize / (1024.0 * 1024.0):F2} MB");
-
-                // For text files, read the actual content
-                if (IsTextFile(Path.GetExtension(document.FilePath)))
-                {
-                    var fileLock = GetFileLock(document.FilePath);
-                    bool fileLockAcquired = false;
-                    try
-                    {
-                        await fileLock.WaitAsync().ConfigureAwait(false);
-                        fileLockAcquired = true;
-
-                        document.Content = await File.ReadAllTextAsync(document.FilePath).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        if (fileLockAcquired)
-                        {
-                            fileLock.Release();
-                        }
-                    }
-
-                    _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
-                        $"Loaded full content, length: {document.Content.Length} characters");
-                }
-                else
-                {
-                    _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
-                        $"Cannot load full content for non-text file: {document.FilePath}");
-                }
-
+                // Return document based on metadata; content is loaded separately
+                var document = ConvertMetadataToDocument(metadata);
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Retrieved document metadata for ID {id}.");
                 return document;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not KeyNotFoundException)
             {
-                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository",
-                    $"Error loading full document content: {ex.Message}");
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Error getting document by ID {id}: {ex.Message}");
                 throw;
             }
             finally
             {
-                _diagnostics.EndOperation("LoadFullDocumentContent");
+                _diagnostics.EndOperation("Repo.GetDocumentById");
+            }
+        }
+
+        public async Task<Document> LoadFullContentAsync(string documentId)
+        {
+            _diagnostics.StartOperation("Repo.LoadFullContent");
+            try
+            {
+                // 1. Get Metadata
+                var metadata = await _metadataStore.GetMetadataByIdAsync(documentId).ConfigureAwait(false);
+                if (metadata == null)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository", $"Cannot load content, metadata not found for ID {documentId}");
+                    throw new KeyNotFoundException($"Document with ID {documentId} not found.");
+                }
+
+                // 2. Create basic Document object
+                var document = ConvertMetadataToDocument(metadata);
+
+                // 3. Load Content
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Loading content for document {documentId} via ContentStore.");
+                document.Content = await _contentStore.LoadContentAsync(documentId).ConfigureAwait(false);
+
+                // 4. Load Embeddings/Chunks if processed
+                if (metadata.HasEmbeddings) // Use flag from metadata
+                {
+                    _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Loading embeddings for document {documentId} via ContentStore.");
+                    document.Chunks = await _contentStore.LoadEmbeddingsAsync(documentId).ConfigureAwait(false) ?? new List<DocumentChunk>();
+                }
+                else
+                {
+                    document.Chunks = new List<DocumentChunk>(); // Ensure Chunks is not null
+                }
+
+                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", $"Loaded full content and {document.Chunks.Count} chunks for document {documentId}.");
+                return document;
+            }
+            catch (Exception ex) when (ex is not KeyNotFoundException)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Error loading full content for ID {documentId}: {ex.Message}");
+                throw new DocumentProcessingException($"Failed to load full content for document {documentId}.", ex);
+            }
+            finally
+            {
+                _diagnostics.EndOperation("Repo.LoadFullContent");
             }
         }
 
         public async Task SaveDocumentAsync(Document document)
         {
-            await EnsureInitializedAsync().ConfigureAwait(false);
-
-            // Always save content to disk
-            if (!string.IsNullOrEmpty(document.Content))
-            {
-                string documentPath = Path.Combine(_documentsFolder, $"{document.Id}.txt");
-
-                // Ensure directory exists
-                string? directory = Path.GetDirectoryName(documentPath);
-                if (!string.IsNullOrEmpty(directory))
-                    Directory.CreateDirectory(directory);
-
-                var fileLock = GetFileLock(documentPath);
-                bool fileLockAcquired = false;
-                try
-                {
-                    await fileLock.WaitAsync().ConfigureAwait(false);
-                    fileLockAcquired = true;
-
-                    await File.WriteAllTextAsync(documentPath, document.Content).ConfigureAwait(false);
-                }
-                finally
-                {
-                    if (fileLockAcquired)
-                    {
-                        fileLock.Release();
-                    }
-                }
-
-                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
-                    $"Saved document content to disk: {document.Id}, size: {document.Content.Length} chars");
-            }
-
-            // Save embeddings if processed
-            if (document.IsProcessed && document.Chunks.Count > 0)
-            {
-                string embeddingsPath = Path.Combine(_embeddingsFolder, $"{document.Id}.json");
-                string embeddingsJson = JsonSerializer.Serialize(document.Chunks);
-
-                var fileLock = GetFileLock(embeddingsPath);
-                bool fileLockAcquired = false;
-                try
-                {
-                    await fileLock.WaitAsync().ConfigureAwait(false);
-                    fileLockAcquired = true;
-
-                    await File.WriteAllTextAsync(embeddingsPath, embeddingsJson).ConfigureAwait(false);
-                }
-                finally
-                {
-                    if (fileLockAcquired)
-                    {
-                        fileLock.Release();
-                    }
-                }
-
-                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
-                    $"Saved {document.Chunks.Count} chunks for document: {document.Id}");
-            }
-
-            // Update cache
-            bool cacheLockAcquired = false;
+            _diagnostics.StartOperation("Repo.SaveDocument");
             try
             {
-                await _cacheLock.WaitAsync().ConfigureAwait(false);
-                cacheLockAcquired = true;
+                // 1. Create/Update Metadata
+                var metadata = new DocumentMetadata
+                {
+                    Id = document.Id,
+                    Name = document.Name,
+                    FilePath = document.FilePath,
+                    DateAdded = document.DateAdded,
+                    IsProcessed = document.IsProcessed,
+                    IsSelected = document.IsSelected,
+                    FileSize = document.FileSize,
+                    DocumentType = document.DocumentType,
+                    HasEmbeddings = document.IsProcessed && (document.Chunks?.Count > 0) // Set flag based on state
+                };
+                await _metadataStore.SaveMetadataAsync(metadata).ConfigureAwait(false);
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Saved metadata for document {document.Id}.");
 
-                _documentsCache[document.Id] = document;
+
+                // 2. Save Content if present
+                if (!string.IsNullOrEmpty(document.Content))
+                {
+                    await _contentStore.SaveContentAsync(document.Id, document.Content).ConfigureAwait(false);
+                    _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Saved content for document {document.Id}.");
+                }
+
+                // 3. Save Embeddings if processed
+                if (metadata.HasEmbeddings && document.Chunks != null) // Check flag and chunks list
+                {
+                    await _contentStore.SaveEmbeddingsAsync(document.Id, document.Chunks).ConfigureAwait(false);
+                    _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Saved {document.Chunks.Count} embeddings for document {document.Id}.");
+                }
+                else if (document.IsProcessed && (!metadata.HasEmbeddings || document.Chunks == null || document.Chunks.Count == 0))
+                {
+                    // If marked processed but no chunks to save, maybe delete old embeddings file?
+                    _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository", $"Document {document.Id} is processed but has no chunks to save. Deleting any existing embeddings file.");
+                    await _contentStore.DeleteEmbeddingsAsync(document.Id).ConfigureAwait(false);
+                }
+
+                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", $"Successfully saved document {document.Id}.");
+
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Error saving document {document.Id}: {ex.Message}");
+                throw;
             }
             finally
             {
-                if (cacheLockAcquired)
-                {
-                    _cacheLock.Release();
-                }
+                _diagnostics.EndOperation("Repo.SaveDocument");
             }
-
-            // Update metadata
-            await SaveMetadataAsync().ConfigureAwait(false);
-
-            _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
-                $"Document saved: {document.Id}, Name: {document.Name}, Size: {document.FileSize / 1024.0:F2} KB");
         }
 
         public async Task DeleteDocumentAsync(string id)
         {
-            await EnsureInitializedAsync().ConfigureAwait(false);
-
-            Document? document = null;
-
-            bool cacheLockAcquired = false;
+            _diagnostics.StartOperation("Repo.DeleteDocument");
             try
             {
-                await _cacheLock.WaitAsync().ConfigureAwait(false);
-                cacheLockAcquired = true;
+                // Attempt to delete files first, then metadata
+                await _contentStore.DeleteContentAsync(id).ConfigureAwait(false);
+                await _contentStore.DeleteEmbeddingsAsync(id).ConfigureAwait(false);
+                await _metadataStore.DeleteMetadataAsync(id).ConfigureAwait(false); // This handles non-existent metadata gracefully
 
-                if (_documentsCache.TryGetValue(id, out var docRef))
-                {
-                    document = docRef;
-                    // Remove from cache
-                    _documentsCache.Remove(id);
-                }
+                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", $"Deleted document {id} (metadata and content files).");
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Error deleting document {id}: {ex.Message}");
+                throw;
             }
             finally
             {
-                if (cacheLockAcquired)
-                {
-                    _cacheLock.Release();
-                }
-            }
-
-            if (document != null)
-            {
-                // Delete document file
-                string documentPath = Path.Combine(_documentsFolder, $"{document.Id}.txt");
-                if (File.Exists(documentPath))
-                {
-                    var fileLock = GetFileLock(documentPath);
-                    bool fileLockAcquired = false;
-                    try
-                    {
-                        await fileLock.WaitAsync().ConfigureAwait(false);
-                        fileLockAcquired = true;
-
-                        File.Delete(documentPath);
-                    }
-                    finally
-                    {
-                        if (fileLockAcquired)
-                        {
-                            fileLock.Release();
-                        }
-                    }
-                }
-
-                // Delete embeddings file
-                string embeddingsPath = Path.Combine(_embeddingsFolder, $"{document.Id}.json");
-                if (File.Exists(embeddingsPath))
-                {
-                    var fileLock = GetFileLock(embeddingsPath);
-                    bool fileLockAcquired = false;
-                    try
-                    {
-                        await fileLock.WaitAsync().ConfigureAwait(false);
-                        fileLockAcquired = true;
-
-                        File.Delete(embeddingsPath);
-                    }
-                    finally
-                    {
-                        if (fileLockAcquired)
-                        {
-                            fileLock.Release();
-                        }
-                    }
-                }
-
-                // Update metadata
-                await SaveMetadataAsync().ConfigureAwait(false);
-
-                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository",
-                    $"Document deleted: {id}");
-            }
-            else
-            {
-                _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
-                    $"Attempted to delete non-existent document: {id}");
+                _diagnostics.EndOperation("Repo.DeleteDocument");
             }
         }
 
-        public async Task<DocumentChunk> GetChunkByIdAsync(string chunkId)
+        public async Task<DocumentChunk?> GetChunkByIdAsync(string chunkId)
         {
-            await EnsureInitializedAsync().ConfigureAwait(false);
-
-            bool lockAcquired = false;
+            _diagnostics.StartOperation("Repo.GetChunkById");
             try
             {
-                await _cacheLock.WaitAsync().ConfigureAwait(false);
-                lockAcquired = true;
+                _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository", $"GetChunkByIdAsync ({chunkId}) may be inefficient - loading all metadata.");
+                // This is inefficient: requires loading all metadata, then potentially loading embedding files one by one.
+                // A better approach would involve a different storage mechanism if fast chunk lookup is critical.
+                var allMetadata = await _metadataStore.LoadMetadataAsync().ConfigureAwait(false);
 
-                foreach (var document in _documentsCache.Values)
+                foreach (var meta in allMetadata.Values)
                 {
-                    if (document.Chunks != null)
+                    if (meta.HasEmbeddings)
                     {
-                        var chunk = document.Chunks.FirstOrDefault(c => c.Id == chunkId);
-                        if (chunk != null)
+                        var chunks = await _contentStore.LoadEmbeddingsAsync(meta.Id).ConfigureAwait(false);
+                        var foundChunk = chunks?.FirstOrDefault(c => c.Id == chunkId);
+                        if (foundChunk != null)
                         {
-                            return chunk;
+                            _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Found chunk {chunkId} in document {meta.Id}");
+                            return foundChunk;
                         }
                     }
                 }
+                _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository", $"Chunk {chunkId} not found after checking all documents.");
+                return null; // Or throw KeyNotFoundException
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Error getting chunk by ID {chunkId}: {ex.Message}");
+                throw;
             }
             finally
             {
-                if (lockAcquired)
-                {
-                    _cacheLock.Release();
-                }
+                _diagnostics.EndOperation("Repo.GetChunkById");
             }
-
-            _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
-                $"Chunk with ID {chunkId} not found");
-            throw new KeyNotFoundException($"Chunk with ID {chunkId} not found");
         }
 
-        private bool IsTextFile(string extension)
-        {
-            // List of common text file extensions
-            string[] textExtensions = new[] {
-                ".txt", ".md", ".cs", ".json", ".xml", ".html", ".htm", ".css",
-                ".js", ".ts", ".py", ".java", ".c", ".cpp", ".h", ".hpp",
-                ".sql", ".yaml", ".yml", ".config", ".ini", ".log"
-            };
-
-            return textExtensions.Contains(extension.ToLowerInvariant());
-        }
-
-        // Cleanup resources
-        public void Dispose()
-        {
-            _initializationLock?.Dispose();
-            _cacheLock?.Dispose();
-
-            // Dispose all file locks
-            foreach (var fileLock in _fileSpecificLocks.Values)
-            {
-                fileLock?.Dispose();
-            }
-            _fileSpecificLocks.Clear();
-        }
+        // Removed EnsureInitializedAsync, SaveMetadataAsync, file locking logic, Dispose
+        // These responsibilities are now in the specific store implementations.
     }
 }

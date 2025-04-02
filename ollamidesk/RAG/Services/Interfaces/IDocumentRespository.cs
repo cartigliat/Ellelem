@@ -1,3 +1,4 @@
+// ollamidesk/RAG/Services/Interfaces/IDocumentRepository.cs
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using ollamidesk.RAG.Models;
@@ -8,9 +9,10 @@ namespace ollamidesk.RAG.Services.Interfaces
     {
         Task<List<Document>> GetAllDocumentsAsync();
         Task<Document> GetDocumentByIdAsync(string id);
-        Task<Document> LoadFullContentAsync(string documentId); // New method for large file handling
+        Task<Document> LoadFullContentAsync(string documentId);
         Task SaveDocumentAsync(Document document);
         Task DeleteDocumentAsync(string id);
-        Task<DocumentChunk> GetChunkByIdAsync(string chunkId);
+        // Corrected the return type to be nullable
+        Task<DocumentChunk?> GetChunkByIdAsync(string chunkId);
     }
 }

@@ -1,3 +1,4 @@
+// ollamidesk/DependencyInjection/ServiceProviderFactory.cs
 using System;
 using Microsoft.Extensions.DependencyInjection;
 using ollamidesk.Configuration;
@@ -13,145 +14,173 @@ using ollamidesk.RAG.DocumentProcessors.Implementations;
 
 namespace ollamidesk.DependencyInjection
 {
-    /// <summary>
-    /// Configures and provides access to the application's service provider
-    /// </summary>
-    public class ServiceProviderFactory
+    public static class ServiceProviderFactory
     {
+        // ... properties ...
         private static IServiceProvider? _serviceProvider;
-
-        /// <summary>
-        /// Gets whether the service provider has been initialized
-        /// </summary>
         public static bool IsInitialized => _serviceProvider != null;
+        public static IServiceProvider ServiceProvider => _serviceProvider ?? throw new InvalidOperationException("Service provider not initialized.");
 
-        /// <summary>
-        /// Gets the service provider
-        /// </summary>
-        public static IServiceProvider ServiceProvider => _serviceProvider ?? throw new InvalidOperationException("Service provider not initialized");
 
-        /// <summary>
-        /// Initializes the service provider with configured services
-        /// </summary>
-        /// <param name="configFilePath">Optional path to the configuration file</param>
         public static void Initialize(string? configFilePath = null)
         {
-            // Create a new service collection
-            var services = new ServiceCollection();
+            if (IsInitialized) return;
 
-            // Register configuration
+            var services = new ServiceCollection();
             var configProvider = new ConfigurationProvider(configFilePath);
             var appSettings = configProvider.LoadConfiguration();
+
+            // Register Configurations
             services.AddSingleton(appSettings);
             services.AddSingleton(appSettings.Ollama);
             services.AddSingleton(appSettings.Rag);
-            services.AddSingleton(appSettings.Storage);
+            services.AddSingleton(appSettings.Storage); // Keep StorageSettings for paths
             services.AddSingleton(appSettings.Diagnostics);
             services.AddSingleton(configProvider);
 
-            // Register services
-            RegisterServices(services, appSettings);
-            services.AddSingleton<IRagConfigurationService, RagConfigurationService>();
+            // Register Core Services (Diagnostics, Config)
+            services.AddSingleton<RagDiagnosticsService>(); // Depends on DiagnosticsSettings
+            services.AddSingleton<IRagConfigurationService, RagConfigurationService>(); // Depends on RagSettings, ConfigProvider, Diagnostics
 
-            // Build the service provider
+            // Register Application Services
+            RegisterServices(services, appSettings);
+
             _serviceProvider = services.BuildServiceProvider();
 
-            // Initialize diagnostics
-            InitializeDiagnostics();
+            // Initialize Database Provider after building ServiceProvider
+            InitializeDatabaseProvider();
 
-            // Log initialization
-            var diagnostics = _serviceProvider.GetService<RagDiagnosticsService>();
-            diagnostics?.Log(DiagnosticLevel.Info, "ServiceProviderFactory",
-                "Dependency injection container initialized");
+            InitializeDiagnostics(); // Initialize diagnostics logging level
+
+            var diagnostics = _serviceProvider?.GetService<RagDiagnosticsService>();
+            diagnostics?.Log(DiagnosticLevel.Info, "ServiceProviderFactory", "Dependency injection container initialized.");
         }
 
-        /// <summary>
-        /// Registers services with the service collection
-        /// </summary>
-        /// <param name="services">The service collection</param>
-        /// <param name="appSettings">The application settings</param>
         private static void RegisterServices(IServiceCollection services, AppSettings appSettings)
         {
-            // Register utility services
             services.AddTransient<CommandLineService>();
-
-            // Configure HttpClient using our configuration class
             HttpClientConfiguration.ConfigureHttpClients(services, appSettings);
 
-            // Register document processors
+            // --- API Client & Embedding Service ---
+            services.AddSingleton<IOllamaApiClient, OllamaApiClient>(); // Uses IHttpClientFactory, OllamaSettings, Diagnostics
+            services.AddSingleton<IEmbeddingService, OllamaEmbeddingService>(); // Uses IHttpClientFactory, OllamaSettings, Diagnostics
+
+            // --- Structure Extractors ---
+            services.AddSingleton<IWordStructureExtractor, WordStructureExtractor>(); // Uses Diagnostics
+            services.AddSingleton<IPdfStructureExtractor, PdfStructureExtractor>(); // Uses Diagnostics
+
+            // --- Document Processors ---
             services.AddSingleton<IDocumentProcessor, TextDocumentProcessor>();
             services.AddSingleton<IDocumentProcessor, MarkdownDocumentProcessor>();
-            services.AddSingleton<IDocumentProcessor, PdfDocumentProcessor>();
-            services.AddSingleton<IDocumentProcessor, WordDocumentProcessor>();
+            services.AddSingleton<IDocumentProcessor, PdfDocumentProcessor>(); // Needs IPdfStructureExtractor
+            services.AddSingleton<IDocumentProcessor, WordDocumentProcessor>(); // Needs IWordStructureExtractor
             services.AddSingleton<DocumentProcessorFactory>();
 
-            // Register repositories and services
-            services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>();
-            services.AddSingleton<IVectorStore, SqliteVectorStore>();
-            services.AddSingleton<IEmbeddingService, OllamaEmbeddingService>();
+            // --- Chunking Strategies & Service ---
+            services.AddSingleton<TextChunkingStrategy>(); // Uses Config, Diagnostics
+            services.AddSingleton<CodeChunkingStrategy>(); // Uses Config, Diagnostics
+            services.AddSingleton<StructuredChunkingStrategy>(); // Uses Config, Diagnostics, TextChunkingStrategy
+            services.AddSingleton<IChunkingStrategy, TextChunkingStrategy>(sp => sp.GetRequiredService<TextChunkingStrategy>());
+            services.AddSingleton<IChunkingStrategy, CodeChunkingStrategy>(sp => sp.GetRequiredService<CodeChunkingStrategy>());
+            services.AddSingleton<IChunkingStrategy, StructuredChunkingStrategy>(sp => sp.GetRequiredService<StructuredChunkingStrategy>());
+            services.AddSingleton<IChunkingService, ChunkingService>(); // Uses IEnumerable<IChunkingStrategy>, TextChunkingStrategy, Diagnostics
 
-            // Register the new refactored services
-            services.AddSingleton<IDocumentManagementService, DocumentManagementService>();
-            services.AddSingleton<IDocumentProcessingService, DocumentProcessingService>();
-            services.AddSingleton<IRetrievalService, RetrievalService>();
-            services.AddSingleton<IPromptEngineeringService, PromptEngineeringService>();
+            // --- Storage Components ---
+            services.AddSingleton<IMetadataStore, JsonMetadataStore>(); // Uses StorageSettings, Diagnostics
+            services.AddSingleton<IContentStore, FileSystemContentStore>(); // Uses StorageSettings, Diagnostics
+            services.AddSingleton<ISqliteConnectionProvider, SqliteConnectionProvider>(); // New: Uses StorageSettings, Diagnostics
+            services.AddSingleton<IVectorStore, SqliteVectorStore>(); // Refactored: Uses ISqliteConnectionProvider, Diagnostics
+
+            // --- RAG Core Services ---
+            services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>(); // Uses IMetadataStore, IContentStore, Diagnostics
+            services.AddSingleton<IDocumentManagementService, DocumentManagementService>(); // Uses IDocumentRepository, Diagnostics, DocProcessorFactory
+            services.AddSingleton<IDocumentProcessingService, DocumentProcessingService>(); // Uses Repo, Embedding, VectorStore, Config, Diagnostics, Chunking
+            services.AddSingleton<IRetrievalService, RetrievalService>(); // Uses VectorStore, Embedding, Config, Diagnostics
+            services.AddSingleton<IPromptEngineeringService, PromptEngineeringService>(); // Uses Diagnostics
+
+            // --- UI & Diagnostics UI Services ---
             services.AddSingleton<IDiagnosticsUIService, DiagnosticsUIService>();
             services.AddTransient<ShowDiagnosticsCommand>();
 
-            // Register model factory and loader
-            services.AddSingleton<OllamaModelFactory>();
-            services.AddSingleton<OllamaModelLoader>();
+            // --- Model Factory & Default ---
+            services.AddSingleton<OllamaModelFactory>(); // Uses Settings, Diagnostics, IOllamaApiClient
+            services.AddTransient<IOllamaModel>(sp => sp.GetRequiredService<OllamaModelFactory>().CreateDefaultModel());
 
-            // Register default model
-            services.AddTransient(sp =>
-            {
-                var factory = sp.GetRequiredService<OllamaModelFactory>();
-                var settings = sp.GetRequiredService<OllamaSettings>();
-                return factory.CreateModel(settings.DefaultModel);
-            });
-
-            // Register view models
+            // --- ViewModels & UI Components ---
             services.AddSingleton<DocumentViewModel>();
             services.AddSingleton<MainViewModel>();
-
-            // Register UI components
             services.AddTransient<MainWindow>();
             services.AddTransient<SideMenuWindow>();
             services.AddTransient<RagDiagnosticWindow>();
-            services.AddTransient<MainWindowRagHelper>();
-
-            // Register diagnostics
-            services.AddSingleton<RagDiagnosticsService>();
         }
 
-        /// <summary>
-        /// Initializes diagnostics components
-        /// </summary>
+        // New method to initialize database provider after container is built
+        private static void InitializeDatabaseProvider()
+        {
+            if (_serviceProvider == null)
+            {
+                Console.WriteLine("Error: Service provider not built before attempting to initialize database provider.");
+                return;
+            }
+            try
+            {
+                var dbProvider = _serviceProvider.GetRequiredService<ISqliteConnectionProvider>();
+                // Run initialization asynchronously but don't wait here (fire-and-forget pattern for startup)
+                // Consider proper async handling if startup depends on DB being ready immediately.
+                dbProvider.InitializeDatabaseAsync().ContinueWith(task => {
+                    if (task.IsFaulted)
+                    {
+                        var diag = _serviceProvider.GetService<RagDiagnosticsService>();
+                        diag?.Log(DiagnosticLevel.Critical, "ServiceProviderFactory", $"Background database initialization failed: {task.Exception?.InnerException?.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                // Log critical failure during provider retrieval or initial sync call attempt
+                var diag = _serviceProvider.GetService<RagDiagnosticsService>();
+                diag?.Log(DiagnosticLevel.Critical, "ServiceProviderFactory", $"Failed to get or initialize database provider: {ex.Message}");
+                Console.WriteLine($"Critical Error: Failed to get or initialize database provider: {ex.Message}");
+            }
+        }
+
+        // ... (InitializeDiagnostics and GetService methods remain the same) ...
         private static void InitializeDiagnostics()
         {
-            var diagnosticsService = ServiceProvider.GetRequiredService<RagDiagnosticsService>();
-            var settings = ServiceProvider.GetRequiredService<DiagnosticsSettings>();
-
-            if (settings.EnableDiagnostics)
+            if (_serviceProvider == null)
             {
-                var level = Enum.Parse<DiagnosticLevel>(settings.DiagnosticLevel);
-                diagnosticsService.Enable(level);
+                Console.WriteLine("Error: Service provider not built before attempting to initialize diagnostics.");
+                return;
+            }
+            try
+            {
+                var diagnosticsService = _serviceProvider.GetRequiredService<RagDiagnosticsService>();
+                var settings = _serviceProvider.GetRequiredService<DiagnosticsSettings>();
+                if (settings.EnableDiagnostics)
+                {
+                    if (Enum.TryParse<DiagnosticLevel>(settings.DiagnosticLevel, true, out var level))
+                    {
+                        diagnosticsService.Enable(level);
+                    }
+                    else
+                    {
+                        diagnosticsService.Enable(DiagnosticLevel.Info);
+                        diagnosticsService.Log(DiagnosticLevel.Warning, "ServiceProviderFactory", $"Invalid DiagnosticLevel '{settings.DiagnosticLevel}' in config. Defaulting to Info.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                var diagnosticsService = _serviceProvider?.GetService<RagDiagnosticsService>();
+                diagnosticsService?.Log(DiagnosticLevel.Critical, "ServiceProviderFactory", $"Failed to initialize diagnostics: {ex.Message}");
+                Console.WriteLine($"Critical Error: Failed to initialize diagnostics: {ex.Message}");
             }
         }
 
-        /// <summary>
-        /// Gets a service of type T from the service provider
-        /// </summary>
-        /// <typeparam name="T">The service type</typeparam>
-        /// <returns>The service instance</returns>
-        public static T GetService<T>() where T : class
+        public static T GetService<T>() where T : notnull
         {
-            if (!IsInitialized)
-            {
-                throw new InvalidOperationException("Service provider not initialized");
-            }
-
-            return ServiceProvider.GetService<T>() ?? throw new InvalidOperationException($"Service of type {typeof(T).Name} not registered");
+            if (!IsInitialized || _serviceProvider == null) throw new InvalidOperationException("Service provider not initialized.");
+            return _serviceProvider.GetRequiredService<T>();
         }
     }
 }
