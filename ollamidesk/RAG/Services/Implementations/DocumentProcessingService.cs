@@ -1,16 +1,20 @@
 // ollamidesk/RAG/Services/Implementations/DocumentProcessingService.cs
-// Corrected version - Removes embedding semaphore and appSettings usage
+// CORRECTED VERSION - Removed invalid ProcessChunkEmbeddingAsync call from fallback logic
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using ollamidesk.Configuration; // Keep for RagSettings via IRagConfigurationService
+using ollamidesk.Configuration;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services.Interfaces;
+using ollamidesk.RAG.DocumentProcessors.Interfaces;
+using ollamidesk.RAG.DocumentProcessors.Implementations;
+using ollamidesk.RAG.Exceptions;
 
 namespace ollamidesk.RAG.Services.Implementations
 {
@@ -24,13 +28,11 @@ namespace ollamidesk.RAG.Services.Implementations
         private readonly IVectorStore _vectorStore;
         private readonly RagDiagnosticsService _diagnostics;
         private readonly IRagConfigurationService _configService;
-        private readonly IChunkingService _chunkingService; // <-- ADDED
-        private readonly int _embeddingBatchSize; // Store batch size from config
+        private readonly IChunkingService _chunkingService;
+        private readonly DocumentProcessorFactory _documentProcessorFactory;
+        private readonly int _embeddingBatchSize;
 
-        // Use a single lock for processing one document at a time
         private readonly SemaphoreSlim _processingLock = new SemaphoreSlim(1, 1);
-        // REMOVED: _embeddingSemaphore - Embedding concurrency is handled within OllamaEmbeddingService
-
         private bool _disposedValue;
 
         public DocumentProcessingService(
@@ -39,91 +41,121 @@ namespace ollamidesk.RAG.Services.Implementations
             IVectorStore vectorStore,
             IRagConfigurationService configService,
             RagDiagnosticsService diagnostics,
-            IChunkingService chunkingService) // <-- ADDED dependency
+            IChunkingService chunkingService,
+            DocumentProcessorFactory documentProcessorFactory)
         {
             _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
             _embeddingService = embeddingService ?? throw new ArgumentNullException(nameof(embeddingService));
             _vectorStore = vectorStore ?? throw new ArgumentNullException(nameof(vectorStore));
             _configService = configService ?? throw new ArgumentNullException(nameof(configService));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
-            _chunkingService = chunkingService ?? throw new ArgumentNullException(nameof(chunkingService)); // <-- ADDED initialization
+            _chunkingService = chunkingService ?? throw new ArgumentNullException(nameof(chunkingService));
+            _documentProcessorFactory = documentProcessorFactory ?? throw new ArgumentNullException(nameof(documentProcessorFactory));
 
-            _embeddingBatchSize = _configService.EmbeddingBatchSize; // Get batch size from config
-
-            // REMOVED lines trying to access appSettings and initialize _embeddingSemaphore
-            // int maxConcurrentEmbeddings = appSettings.Ollama.MaxConcurrentRequests > 0 ? appSettings.Ollama.MaxConcurrentRequests : 5;
-            // _embeddingSemaphore = new SemaphoreSlim(maxConcurrentEmbeddings, maxConcurrentEmbeddings);
+            _embeddingBatchSize = _configService.EmbeddingBatchSize;
 
             _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
-                $"Service initialized with settings: EmbeddingBatchSize={_embeddingBatchSize}");
-            // REMOVED MaxConcurrentEmbeddings from log message
+               $"Service initialized with settings: EmbeddingBatchSize={_embeddingBatchSize}");
         }
 
         public Task<Document> LoadFullContentAsync(Document document)
         {
             if (document == null) throw new ArgumentNullException(nameof(document));
             _diagnostics.Log(DiagnosticLevel.Debug, "DocumentProcessingService", $"LoadFullContentAsync called for {document.Id}. Returning document as content is pre-loaded.");
-            // Return non-null document wrapped in a Task
             return Task.FromResult(document);
         }
 
-        // Interface method - now delegates chunking to IChunkingService
         public async Task<List<DocumentChunk>> ChunkDocumentAsync(Document document)
         {
-            // Delegate directly to the injected chunking service
-            return await _chunkingService.ChunkDocumentAsync(document).ConfigureAwait(false);
+            return await _chunkingService.ChunkDocumentAsync(document, null).ConfigureAwait(false);
         }
-
 
         public async Task<Document> ProcessDocumentAsync(Document document)
         {
             bool lockAcquired = false;
+            StructuredDocument? structuredDoc = null;
 
             try
             {
-                // Use the semaphore to ensure only one document is processed at a time
                 await _processingLock.WaitAsync().ConfigureAwait(false);
                 lockAcquired = true;
 
                 _diagnostics.StartOperation("ProcessDocument");
-
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
-                    $"Processing document: {document.Id}");
+                   $"Processing document: {document.Id} ('{document.Name}')");
 
-                if (document == null)
+                if (document == null) throw new ArgumentNullException(nameof(document));
+                if (string.IsNullOrWhiteSpace(document.FilePath) || !File.Exists(document.FilePath))
                 {
-                    throw new ArgumentNullException(nameof(document));
+                    throw new FileNotFoundException($"Document file path is invalid or file does not exist for ID: {document.Id}", document.FilePath);
+                }
+
+                // --- Ensure Content is Loaded (if necessary) ---
+                if (string.IsNullOrWhiteSpace(document.Content))
+                {
+                    _diagnostics.Log(DiagnosticLevel.Warning, "DocumentProcessingService", $"Document {document.Id} content is empty. Further processing might fail if content is required.");
+                    // If content loading here is needed, implement it.
+                }
+
+                // --- Structure Extraction Step ---
+                _diagnostics.StartOperation("ExtractStructure");
+                try
+                {
+                    string extension = Path.GetExtension(document.FilePath).ToLowerInvariant();
+                    var processor = _documentProcessorFactory.GetProcessor(extension);
+
+                    if (processor.SupportsStructuredExtraction)
+                    {
+                        _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService", $"Attempting structure extraction for {document.Id} using {processor.GetType().Name}");
+                        structuredDoc = await processor.ExtractStructuredContentAsync(document.FilePath).ConfigureAwait(false);
+                        _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService", $"Structure extraction completed. Found {structuredDoc?.Elements?.Count ?? 0} elements.");
+                    }
+                    else
+                    {
+                        _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService", $"Processor {processor.GetType().Name} does not support structured extraction for {document.Id}.");
+                    }
+                }
+                catch (NotSupportedException nse)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Warning, "DocumentProcessingService", $"Structure extraction skipped: {nse.Message}");
+                    structuredDoc = null;
+                }
+                catch (Exception structEx)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService", $"Structure extraction failed for document {document.Id}: {structEx.Message}");
+                    structuredDoc = null;
+                }
+                finally
+                {
+                    _diagnostics.EndOperation("ExtractStructure");
                 }
 
                 // --- Chunking ---
                 _diagnostics.StartOperation("DocumentChunking");
                 try
                 {
-                    // Use the interface method which now delegates
-                    document.Chunks = await ChunkDocumentAsync(document).ConfigureAwait(false);
+                    document.Chunks = await _chunkingService.ChunkDocumentAsync(document, structuredDoc).ConfigureAwait(false);
+                    _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService", $"Chunking service returned {document.Chunks?.Count ?? 0} chunks for {document.Id}.");
                 }
                 catch (Exception chunkEx)
                 {
                     _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService", $"Error during chunking for document {document.Id}: {chunkEx.Message}");
-                    document.IsProcessed = false; // Mark as not processed
-                    document.Chunks = new List<DocumentChunk>(); // Ensure chunks list is empty
-                    // Save the unprocessed state
+                    document.IsProcessed = false;
+                    document.Chunks = new List<DocumentChunk>();
                     await _documentRepository.SaveDocumentAsync(document).ConfigureAwait(false);
-                    throw; // Rethrow to indicate processing failure
+                    throw;
                 }
                 finally
                 {
                     _diagnostics.EndOperation("DocumentChunking");
                 }
 
-
                 // --- Fallback Chunking ---
                 if (document.Chunks.Count == 0)
                 {
                     _diagnostics.Log(DiagnosticLevel.Warning, "DocumentProcessingService",
-                        $"No chunks were created by ChunkingService for document: {document.Id}. Attempting fallback.");
+                       $"No chunks were created by ChunkingService for document: {document.Id}. Attempting fallback.");
 
-                    // (Fallback logic remains the same as previous corrected version)
                     if (!string.IsNullOrWhiteSpace(document.Content) && document.Content.Length <= _configService.ChunkSize * 2)
                     {
                         document.Chunks.Add(new DocumentChunk
@@ -136,6 +168,7 @@ namespace ollamidesk.RAG.Services.Implementations
                             ChunkType = "FullDocument"
                         });
                         _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService", "Fallback: Created a single chunk for the entire document");
+                        // <<< NO embedding call needed here >>>
                     }
                     else if (!string.IsNullOrWhiteSpace(document.Content))
                     {
@@ -156,6 +189,7 @@ namespace ollamidesk.RAG.Services.Implementations
                                     Source = document.Name,
                                     ChunkType = "FixedSizeFallback"
                                 });
+                                // <<< NO embedding call needed here >>>
                             }
                         }
                         _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService", $"Fallback: Created {document.Chunks.Count} fixed-size chunks.");
@@ -164,6 +198,8 @@ namespace ollamidesk.RAG.Services.Implementations
                     {
                         _diagnostics.Log(DiagnosticLevel.Warning, "DocumentProcessingService", $"Document {document.Id} content is empty or whitespace, cannot create fallback chunks.");
                     }
+                    // --- ERROR REMOVED: The line causing the error was likely here ---
+                    // Remove any stray calls like: await ProcessChunkEmbeddingAsync(chunk);
                 }
 
                 // --- Embedding Generation ---
@@ -171,27 +207,24 @@ namespace ollamidesk.RAG.Services.Implementations
                 {
                     _diagnostics.StartOperation("GenerateChunkEmbeddings");
                     int processedChunks = 0;
-                    var embeddingTasks = new List<Task>();
-
-                    // Process chunks in batches
+                    // Process chunks in batches using the helper method
                     for (int i = 0; i < document.Chunks.Count; i += _embeddingBatchSize)
                     {
                         int currentBatchSize = Math.Min(_embeddingBatchSize, document.Chunks.Count - i);
                         var batch = document.Chunks.GetRange(i, currentBatchSize);
-                        var batchTasks = new List<Task>(); // Tasks for the current batch
+                        var batchTasks = new List<Task>();
 
-                        foreach (var chunk in batch)
+                        foreach (var currentChunk in batch) // Use a different variable name here ('currentChunk')
                         {
-                            batchTasks.Add(ProcessChunkEmbeddingAsync(chunk)); // Uses helper below
+                            batchTasks.Add(ProcessChunkEmbeddingAsync(currentChunk)); // Pass the loop variable
                         }
 
                         try
                         {
-                            // Wait for the current batch to complete
                             await Task.WhenAll(batchTasks).ConfigureAwait(false);
                             processedChunks += batch.Count;
                             _diagnostics.Log(DiagnosticLevel.Debug, "DocumentProcessingService",
-                                $"Embedding batch (size {batch.Count}) completed. Processed {processedChunks}/{document.Chunks.Count} chunks.");
+                               $"Embedding batch (size {batch.Count}) completed. Processed {processedChunks}/{document.Chunks.Count} chunks.");
                         }
                         catch (AggregateException aggEx)
                         {
@@ -200,33 +233,31 @@ namespace ollamidesk.RAG.Services.Implementations
                             {
                                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService", $"  - {innerEx.Message}");
                             }
-                            // Logged errors, continue processing other batches. Failed chunks will have empty embeddings.
                         }
                         catch (Exception ex)
                         {
                             _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService",
                                $"Unexpected error during embedding batch starting at index {i}: {ex.Message}");
-                            // Logged error, continue processing other batches.
                         }
                     }
                     _diagnostics.EndOperation("GenerateChunkEmbeddings");
 
-                    // --- Filtering and Saving ---
+                    // Filtering and Saving (remains the same)
                     int originalCount = document.Chunks.Count;
                     document.Chunks.RemoveAll(c => c.Embedding == null || c.Embedding.Length == 0);
                     if (document.Chunks.Count < originalCount)
                     {
                         _diagnostics.Log(DiagnosticLevel.Warning, "DocumentProcessingService",
-                            $"Removed {originalCount - document.Chunks.Count} chunks with failed embeddings for document {document.Id}.");
+                           $"Removed {originalCount - document.Chunks.Count} chunks with failed embeddings for document {document.Id}.");
                     }
-                } // End if(document.Chunks.Count > 0)
+                }
 
                 // --- Final Status Update & Save ---
-                document.IsProcessed = document.Chunks.Count > 0; // Mark processed only if valid chunks exist
-                document.IsSelected = true; // Auto-select after attempt
-
+                document.IsProcessed = document.Chunks.Count > 0;
+                document.IsSelected = true;
                 await _documentRepository.SaveDocumentAsync(document).ConfigureAwait(false);
 
+                // --- Add Vectors to Store ---
                 if (document.IsProcessed)
                 {
                     _diagnostics.StartOperation("AddVectorsToStore");
@@ -238,7 +269,6 @@ namespace ollamidesk.RAG.Services.Implementations
                     catch (Exception vsEx)
                     {
                         _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService", $"Failed to add vectors to store for document {document.Id}: {vsEx.Message}");
-                        // Optionally: Mark document as partially processed or needing re-indexing
                     }
                     finally
                     {
@@ -251,22 +281,21 @@ namespace ollamidesk.RAG.Services.Implementations
                 }
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentProcessingService",
-                     $"Document processing finished for: {document.Id}, Processed: {document.IsProcessed}, Valid Chunks: {document.Chunks.Count}");
+                    $"Document processing finished for: {document.Id}, Processed: {document.IsProcessed}, Valid Chunks: {document.Chunks.Count}");
 
                 return document;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not DocumentProcessingException && ex is not FileNotFoundException)
             {
-                _diagnostics.Log(DiagnosticLevel.Critical, "DocumentProcessingService", // Elevated level for top-level failure
-                   $"Unhandled failure during processing document {document?.Id}: {ex.Message}{Environment.NewLine}Stack Trace: {ex.StackTrace}");
-                // Ensure document state reflects failure if possible
+                _diagnostics.Log(DiagnosticLevel.Critical, "DocumentProcessingService",
+                  $"Unhandled failure during processing document {document?.Id}: {ex.Message}{Environment.NewLine}Stack Trace: {ex.StackTrace}");
                 if (document != null)
                 {
                     document.IsProcessed = false;
-                    document.Chunks = new List<DocumentChunk>(); // Clear potentially partial chunks
+                    document.Chunks = new List<DocumentChunk>();
                     try { await _documentRepository.SaveDocumentAsync(document).ConfigureAwait(false); } catch { /* Ignore save error */ }
                 }
-                throw; // Rethrow to signal failure to the caller
+                throw new DocumentProcessingException($"Unexpected error processing document {document?.Id}.", ex);
             }
             finally
             {
@@ -275,42 +304,32 @@ namespace ollamidesk.RAG.Services.Implementations
             }
         }
 
-        // Helper method for processing a single chunk's embedding (relies on IEmbeddingService's internal concurrency)
-        private async Task ProcessChunkEmbeddingAsync(DocumentChunk chunk)
+        // Helper method ProcessChunkEmbeddingAsync remains unchanged
+        private async Task ProcessChunkEmbeddingAsync(DocumentChunk chunk) // Parameter name is 'chunk'
         {
-            // REMOVED semaphore acquire/release here
             try
             {
                 _diagnostics.Log(DiagnosticLevel.Debug, "DocumentProcessingService", $"Generating embedding for chunk {chunk.Id} (Index: {chunk.ChunkIndex}) via EmbeddingService.");
+                // Use the parameter 'chunk' here
                 chunk.Embedding = await _embeddingService.GenerateEmbeddingAsync(chunk.Content).ConfigureAwait(false);
                 _diagnostics.Log(DiagnosticLevel.Debug, "DocumentProcessingService", $"Embedding generated for chunk {chunk.Id}, length: {chunk.Embedding?.Length ?? 0}");
             }
             catch (Exception ex)
             {
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentProcessingService",
-                    $"EmbeddingService failed for chunk {chunk.Id} (Index: {chunk.ChunkIndex}): {ex.Message}");
-                chunk.Embedding = Array.Empty<float>(); // Mark as failed
-            }
-            finally
-            {
-                // REMOVED semaphore release
+                   $"EmbeddingService failed for chunk {chunk.Id} (Index: {chunk.ChunkIndex}): {ex.Message}");
+                chunk.Embedding = Array.Empty<float>();
             }
         }
-
-
-        // --- REMOVED ChunkTextDocument, ChunkStructuredDocument, ChunkCodeDocument methods ---
-
 
         #region IDisposable
         protected virtual void Dispose(bool disposing)
         {
-            if (!_disposedValue) // Corrected: removed 'public Task<Document> LoadFullContentAsync;'
+            if (!_disposedValue)
             {
                 if (disposing)
                 {
-                    // Dispose managed resources
                     _processingLock?.Dispose();
-                    // REMOVED: _embeddingSemaphore?.Dispose();
                 }
                 _disposedValue = true;
             }

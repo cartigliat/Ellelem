@@ -1,4 +1,5 @@
 // ollamidesk/RAG/Services/Implementations/PdfStructureExtractor.cs
+// MODIFIED VERSION with optimizations
 using IOPath = System.IO.Path; // Define alias for System.IO.Path
 using System;
 using System.Collections.Generic;
@@ -18,7 +19,7 @@ using ollamidesk.RAG.DocumentProcessors.Interfaces;
 using ollamidesk.RAG.Services.Interfaces; // Added interface namespace
 using ollamidesk.RAG.Exceptions; // Added for potential exceptions
 
-namespace ollamidesk.RAG.Services.Implementations // Changed namespace to match interface/implementations pattern
+namespace ollamidesk.RAG.Services.Implementations
 {
     /// <summary>
     /// Extracts structured content from PDF documents using iText7.
@@ -26,6 +27,10 @@ namespace ollamidesk.RAG.Services.Implementations // Changed namespace to match 
     public class PdfStructureExtractor : IPdfStructureExtractor
     {
         private readonly RagDiagnosticsService _diagnostics;
+
+        // Confidence threshold for font name checks (adjust if needed)
+        private static readonly string[] BoldSubstrings = { "bold", "black", "heavy", "semibold" };
+        private static readonly string[] ItalicSubstrings = { "italic", "oblique" };
 
         public PdfStructureExtractor(RagDiagnosticsService diagnostics)
         {
@@ -47,56 +52,53 @@ namespace ollamidesk.RAG.Services.Implementations // Changed namespace to match 
                 _diagnostics.Log(DiagnosticLevel.Info, "PdfStructureExtractor",
                     $"Extracting structured content from PDF: {IOPath.GetFileName(filePath)}");
 
-                // Use Task.Run to execute potentially blocking file I/O and iText processing
-                return await Task.Run(() => // Removed async from lambda as inner operations are sync
+                return await Task.Run(() =>
                 {
                     var structuredDoc = new StructuredDocument
                     {
                         Title = IOPath.GetFileNameWithoutExtension(filePath)
                     };
+                    var allParagraphsAcrossPages = new List<TextParagraph>(); // Store all paragraphs for global analysis
 
                     try
                     {
                         using (PdfReader pdfReader = new PdfReader(filePath))
                         using (PdfDocument pdfDocument = new PdfDocument(pdfReader))
                         {
-                            // Try to extract document metadata first
                             ExtractDocumentMetadata(pdfDocument, structuredDoc);
 
                             int numPages = pdfDocument.GetNumberOfPages();
                             _diagnostics.Log(DiagnosticLevel.Debug, "PdfStructureExtractor", $"Processing {numPages} pages.");
                             for (int i = 1; i <= numPages; i++)
                             {
-                                ProcessPage(pdfDocument.GetPage(i), i, numPages, structuredDoc);
+                                // Process page and add paragraphs to the global list
+                                allParagraphsAcrossPages.AddRange(ProcessPage(pdfDocument.GetPage(i), i, structuredDoc));
                             }
                         }
 
-                        // After extracting all content, try to identify structure
-                        EnhanceDocumentStructure(structuredDoc);
+                        // After extracting all content, try to identify structure globally
+                        EnhanceDocumentStructure(structuredDoc, allParagraphsAcrossPages);
                         _diagnostics.Log(DiagnosticLevel.Info, "PdfStructureExtractor", $"Extraction complete. Found {structuredDoc.Elements.Count} elements.");
                     }
                     catch (iText.IO.Exceptions.IOException ioEx) when (ioEx.Message.Contains("PDF header signature not found"))
                     {
                         _diagnostics.Log(DiagnosticLevel.Error, "PdfStructureExtractor", $"Invalid PDF header for file: {filePath}. Error: {ioEx.Message}");
                         structuredDoc.Elements.Add(new DocumentElement { Type = ElementType.Paragraph, Text = $"[Error: Invalid or corrupt PDF file (header signature not found): {IOPath.GetFileName(filePath)}]" });
-                        // No rethrow, return the document with the error message
                     }
                     catch (Exception ex)
                     {
                         _diagnostics.Log(DiagnosticLevel.Error, "PdfStructureExtractor",
                            $"Internal error during PDF structure extraction task: {ex.Message}");
-                        // Wrap in a processing exception to give context
                         throw new DocumentProcessingException($"Failed to extract structure from PDF: {IOPath.GetFileName(filePath)}", ex);
                     }
 
-                    return structuredDoc; // Removed Task.FromResult and await
+                    return structuredDoc;
                 }).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not DocumentProcessingException && ex is not FileNotFoundException)
             {
                 _diagnostics.Log(DiagnosticLevel.Error, "PdfStructureExtractor",
                     $"Outer error extracting PDF structure: {ex.Message}");
-                // Wrap in a processing exception to give context
                 throw new DocumentProcessingException($"Error processing PDF file: {IOPath.GetFileName(filePath)}", ex);
             }
             finally
@@ -106,10 +108,11 @@ namespace ollamidesk.RAG.Services.Implementations // Changed namespace to match 
         }
 
 
-        #region Helper Methods (Copied from PdfDocumentProcessor)
+        #region Helper Methods (Modified)
 
         private void ExtractDocumentMetadata(PdfDocument pdfDocument, StructuredDocument structuredDoc)
         {
+            // (Same as before)
             try
             {
                 PdfDocumentInfo info = pdfDocument.GetDocumentInfo();
@@ -126,9 +129,11 @@ namespace ollamidesk.RAG.Services.Implementations // Changed namespace to match 
             }
         }
 
-        private void ProcessPage(PdfPage page, int pageNumber, int totalPages, StructuredDocument structuredDoc)
+        // Modified to return paragraphs for global analysis later
+        private List<TextParagraph> ProcessPage(PdfPage page, int pageNumber, StructuredDocument structuredDoc)
         {
             _diagnostics.Log(DiagnosticLevel.Debug, "PdfStructureExtractor", $"Processing page {pageNumber}.");
+            var pageParagraphs = new List<TextParagraph>();
             try
             {
                 var strategy = new CustomLocationTextExtractionStrategy();
@@ -140,96 +145,104 @@ namespace ollamidesk.RAG.Services.Implementations // Changed namespace to match 
                 {
                     _diagnostics.Log(DiagnosticLevel.Warning, "PdfStructureExtractor",
                         $"Page {pageNumber} might be image-based or empty.");
-                    structuredDoc.Elements.Add(new DocumentElement
-                    {
-                        Type = ElementType.Paragraph,
-                        Text = $"[Page {pageNumber} appears to be image-based or has no extractable text]",
-                        Metadata = new Dictionary<string, string> { { "PageNumber", pageNumber.ToString() }, { "ContentType", "ImageBasedOrEmpty" } }
-                    });
-                    return;
+                    // Add placeholder element directly to structuredDoc here if needed
+                    // structuredDoc.Elements.Add(...)
+                    return pageParagraphs; // Return empty list for this page
                 }
 
-                var paragraphs = GroupTextChunksIntoParagraphs(textChunks);
-                _diagnostics.Log(DiagnosticLevel.Debug, "PdfStructureExtractor", $"Page {pageNumber}: Grouped into {paragraphs.Count} paragraphs.");
+                pageParagraphs = GroupTextChunksIntoParagraphs(textChunks, pageNumber); // Pass page number
+                _diagnostics.Log(DiagnosticLevel.Debug, "PdfStructureExtractor", $"Page {pageNumber}: Grouped into {pageParagraphs.Count} paragraphs.");
 
-
-                foreach (var paragraph in paragraphs)
-                {
-                    if (string.IsNullOrWhiteSpace(paragraph.Text)) continue;
-
-                    bool isHeading = IsLikelyHeading(paragraph, paragraphs);
-                    int? headingLevel = isHeading ? DetermineHeadingLevel(paragraph, paragraphs) : null;
-                    bool isTable = IsLikelyTable(paragraph); // Table check can be refined
-
-                    ElementType elementType = ElementType.Paragraph; // Default
-                    if (isHeading)
-                    {
-                        elementType = headingLevel switch { 1 => ElementType.Heading1, 2 => ElementType.Heading2, _ => ElementType.Heading3 };
-                    }
-                    else if (isTable)
-                    {
-                        elementType = ElementType.Table;
-                    }
-
-                    structuredDoc.Elements.Add(new DocumentElement
-                    {
-                        Type = elementType,
-                        Text = paragraph.Text,
-                        HeadingLevel = headingLevel,
-                        Metadata = new Dictionary<string, string> { { "PageNumber", pageNumber.ToString() }, { "YPosition", paragraph.Y.ToString("F0") }, { "FontSize", paragraph.FontSize.ToString("F1") } }
-                    });
-                }
+                // Initial classification can happen here, but final decision is in EnhanceDocumentStructure
+                // foreach (var para in pageParagraphs) { /* Basic classification? */ }
             }
             catch (Exception ex)
             {
                 _diagnostics.Log(DiagnosticLevel.Error, "PdfStructureExtractor",
                     $"Error processing page {pageNumber}: {ex.Message}");
-                structuredDoc.Elements.Add(new DocumentElement
-                {
-                    Type = ElementType.Paragraph,
-                    Text = $"[Error processing content on page {pageNumber}]",
-                    Metadata = new Dictionary<string, string> { { "PageNumber", pageNumber.ToString() }, { "Error", ex.Message } }
-                });
+                // Add placeholder element directly to structuredDoc here if needed
+                // structuredDoc.Elements.Add(...)
             }
+            return pageParagraphs;
         }
 
-        private void EnhanceDocumentStructure(StructuredDocument structuredDoc)
+        // Modified EnhanceDocumentStructure to take all paragraphs
+        private void EnhanceDocumentStructure(StructuredDocument structuredDoc, List<TextParagraph> allParagraphs)
         {
-            var sectionStack = new Stack<(int Level, string Heading)>(); // Removed index as it wasn't used
+            if (allParagraphs.Count == 0) return;
 
-            // Create section paths based on heading hierarchy
-            for (int i = 0; i < structuredDoc.Elements.Count; i++)
+            // Calculate global font statistics (more robust)
+            var validFontSizes = allParagraphs.Where(p => p.FontSize > 0).Select(p => p.FontSize).ToList();
+            float globalAvgFontSize = validFontSizes.Count > 0 ? validFontSizes.Average() : 10f; // Default if no valid sizes
+            float globalStdDevFontSize = validFontSizes.Count > 1 ? (float)Math.Sqrt(validFontSizes.Average(v => Math.Pow(v - globalAvgFontSize, 2))) : 1f;
+
+            var sectionStack = new Stack<(int Level, string Heading)>();
+            var elements = new List<DocumentElement>(); // Build new list
+
+            foreach (var paragraph in allParagraphs)
             {
-                var element = structuredDoc.Elements[i];
-                int? currentLevel = null;
+                if (string.IsNullOrWhiteSpace(paragraph.Text)) continue;
 
-                if (element.Type == ElementType.Heading1 || element.Type == ElementType.Heading2 || element.Type == ElementType.Heading3)
+                // Detect Lists (basic example)
+                var listMatch = Regex.Match(paragraph.Text.TrimStart(), @"^([\*\-\•]|\d+\.|\w[\.\)])\s+");
+                bool isListItem = listMatch.Success;
+
+                // Heading Check (using global stats and boldness)
+                bool isLikelyHeading = IsLikelyHeading(paragraph, globalAvgFontSize, globalStdDevFontSize);
+                int? headingLevel = isLikelyHeading ? DetermineHeadingLevel(paragraph, allParagraphs) : null;
+
+                // Determine ElementType
+                ElementType elementType = ElementType.Paragraph; // Default
+                if (isLikelyHeading && headingLevel.HasValue)
                 {
-                    currentLevel = element.HeadingLevel ?? (element.Type == ElementType.Heading1 ? 1 : (element.Type == ElementType.Heading2 ? 2 : 3));
+                    elementType = headingLevel switch { 1 => ElementType.Heading1, 2 => ElementType.Heading2, _ => ElementType.Heading3 };
 
-                    // Pop headings of equal or greater level
-                    while (sectionStack.Count > 0 && sectionStack.Peek().Level >= currentLevel.Value)
+                    // --- Update Section Stack ---
+                    int currentLevel = headingLevel.Value;
+                    while (sectionStack.Count > 0 && sectionStack.Peek().Level >= currentLevel)
                     {
                         sectionStack.Pop();
                     }
-                    // Push the current heading
-                    sectionStack.Push((currentLevel.Value, element.Text));
+                    sectionStack.Push((currentLevel, paragraph.Text));
+                    // -------------------------
+                }
+                else if (isListItem)
+                {
+                    elementType = ElementType.ListItem;
+                }
+                // Basic Table check (can be improved)
+                else if (IsLikelyTable(paragraph))
+                {
+                    elementType = ElementType.Table;
                 }
 
-                // Assign the current section path to the element
-                if (sectionStack.Count > 0)
+                // --- Assign Section Path ---
+                string sectionPath = sectionStack.Count > 0
+                    ? string.Join(" / ", sectionStack.Reverse().Select(s => s.Heading))
+                    : string.Empty;
+                // -------------------------
+
+                elements.Add(new DocumentElement
                 {
-                    element.SectionPath = string.Join(" / ", sectionStack.Reverse().Select(s => s.Heading));
-                }
-                else
-                {
-                    element.SectionPath = string.Empty; // Root level
-                }
+                    Type = elementType,
+                    Text = paragraph.Text,
+                    HeadingLevel = headingLevel,
+                    SectionPath = sectionPath, // Assign calculated path
+                    Metadata = new Dictionary<string, string> {
+                        { "PageNumber", paragraph.PageNumber.ToString() },
+                        { "YPosition", paragraph.Y.ToString("F0") },
+                        { "FontSize", paragraph.FontSize.ToString("F1") },
+                        { "IsBold", paragraph.IsBold.ToString() } // Add boldness metadata
+                    }
+                });
             }
-            _diagnostics.Log(DiagnosticLevel.Debug, "PdfStructureExtractor", "Enhanced document structure with section paths.");
+
+            structuredDoc.Elements = elements; // Replace elements with the processed list
+            _diagnostics.Log(DiagnosticLevel.Debug, "PdfStructureExtractor", "Enhanced document structure with section paths and improved element types.");
         }
 
-        private List<TextParagraph> GroupTextChunksIntoParagraphs(List<TextChunk> textChunks)
+        // Modified GroupTextChunksIntoParagraphs
+        private List<TextParagraph> GroupTextChunksIntoParagraphs(List<TextChunk> textChunks, int pageNumber)
         {
             if (textChunks.Count == 0) return new List<TextParagraph>();
 
@@ -239,135 +252,163 @@ namespace ollamidesk.RAG.Services.Implementations // Changed namespace to match 
                 .ToList();
 
             var paragraphs = new List<TextParagraph>();
-            if (sortedChunks.Count == 0) return paragraphs; // Handle empty list after sorting
+            if (sortedChunks.Count == 0) return paragraphs;
 
-            TextParagraph currentParagraph = new TextParagraph { Y = sortedChunks[0].Bounds.GetY(), FontSize = sortedChunks[0].FontSize };
-            float lastXEnd = float.MinValue; // Track end of last chunk on the line
+            TextParagraph currentParagraph = CreateNewParagraph(sortedChunks[0], pageNumber);
+            float lastY = currentParagraph.Y;
+            float lastXEnd = sortedChunks[0].Bounds.GetX() + sortedChunks[0].Bounds.GetWidth();
+            float typicalLineHeight = sortedChunks[0].FontSize * 1.2f; // Estimate typical line height
 
-            for (int i = 0; i < sortedChunks.Count; i++)
+            for (int i = 1; i < sortedChunks.Count; i++)
             {
                 var chunk = sortedChunks[i];
                 var bounds = chunk.Bounds;
+                float currentY = bounds.GetY();
+                float currentXStart = bounds.GetX();
 
-                // Check for new paragraph based on Y-position or large X-gap (start of line)
-                // Tolerance based on font size helps group slightly misaligned lines
-                bool yDifference = Math.Abs(bounds.GetY() - currentParagraph.Y) > chunk.FontSize * 0.7f;
-                bool largeXGap = bounds.GetX() < lastXEnd - chunk.FontSize; // If X is significantly less than previous end, likely new line
+                // Estimate line spacing threshold (adjust multiplier as needed)
+                float paragraphBreakThreshold = typicalLineHeight * 1.5f;
 
-                if (yDifference || largeXGap)
+                // Check for new paragraph:
+                // 1. Significant vertical gap (more than ~1.5 lines)
+                // 2. Or, current chunk starts significantly *before* the previous line ended (indentation, new column)
+                bool yDifference = (lastY - currentY) > paragraphBreakThreshold;
+                bool significantIndent = currentXStart < (lastXEnd - chunk.FontSize * 2) && Math.Abs(lastY - currentY) < paragraphBreakThreshold; // Check Y proximity for indent
+
+                if (yDifference || significantIndent)
                 {
-                    // Finish previous paragraph if it has text
                     if (!string.IsNullOrWhiteSpace(currentParagraph.Text))
                     {
+                        currentParagraph.Text = currentParagraph.Text.Trim(); // Trim final paragraph
                         paragraphs.Add(currentParagraph);
                     }
-                    // Start new paragraph
-                    currentParagraph = new TextParagraph { Y = bounds.GetY(), FontSize = chunk.FontSize, Text = chunk.Text.TrimStart() }; // Trim leading space
-                    lastXEnd = bounds.GetX() + bounds.GetWidth();
+                    currentParagraph = CreateNewParagraph(chunk, pageNumber);
+                    typicalLineHeight = chunk.FontSize * 1.2f; // Update typical height
                 }
-                else
+                else // Add to current paragraph
                 {
-                    // Add to current paragraph
-                    // Check if space is needed based on X distance
-                    float spaceThreshold = chunk.FontSize * 0.2f; // Adjust threshold as needed
-                    if (bounds.GetX() > lastXEnd + spaceThreshold)
+                    float spaceThreshold = chunk.FontSize * 0.2f; // Space width threshold
+                    if (currentXStart > lastXEnd + spaceThreshold)
                     {
-                        currentParagraph.Text += " "; // Add space
+                        currentParagraph.Text += " "; // Add space if horizontal gap
                     }
                     currentParagraph.Text += chunk.Text;
-                    lastXEnd = bounds.GetX() + bounds.GetWidth();
-
-                    // Use font size of the latest chunk for the paragraph? Or average? Max? For now, latest.
+                    // Update paragraph style based on the majority or last chunk? Let's use last for now.
                     currentParagraph.FontSize = chunk.FontSize;
+                    currentParagraph.IsBold = currentParagraph.IsBold || chunk.IsBold; // If any part is bold, mark paragraph as potentially bold
                 }
+                lastY = currentY;
+                lastXEnd = bounds.GetX() + bounds.GetWidth();
             }
 
-            // Add the very last paragraph if it has text
             if (!string.IsNullOrWhiteSpace(currentParagraph.Text))
             {
+                currentParagraph.Text = currentParagraph.Text.Trim();
                 paragraphs.Add(currentParagraph);
             }
-
-            // Post-process: Merge paragraphs that are likely continuations (small Y diff, similar font)
-            // This requires a more complex loop, potentially omitted for simplicity initially.
 
             return paragraphs;
         }
 
-        private bool IsLikelyHeading(TextParagraph paragraph, List<TextParagraph> allParagraphs)
+        private TextParagraph CreateNewParagraph(TextChunk firstChunk, int pageNumber)
         {
-            if (allParagraphs.Count < 3) return false; // Need context
-
-            // Calculate average font size, excluding potential outliers
-            var fontSizes = allParagraphs.Select(p => p.FontSize).Where(fs => fs > 0).ToList();
-            if (fontSizes.Count < 3) return false;
-            float averageFontSize = fontSizes.Average();
-            float stdDev = (float)Math.Sqrt(fontSizes.Average(v => Math.Pow(v - averageFontSize, 2)));
-
-            // Criteria: Significantly larger font, shorter text, not ending with common sentence terminators
-            bool isLargerThanAverage = paragraph.FontSize > averageFontSize + stdDev * 0.5f; // More robust threshold
-            bool isRelativelyShort = paragraph.Text.Length < 120;
-            bool doesNotEndWithPunctuation = !Regex.IsMatch(paragraph.Text.TrimEnd(), @"[.?!:]$");
-            // bool isCentered = false; // <-- REMOVED This Line
-
-            // You could potentially use isCentered here in the future if you implement logic to check X position
-            return isLargerThanAverage && isRelativelyShort && doesNotEndWithPunctuation;
+            return new TextParagraph
+            {
+                Y = firstChunk.Bounds.GetY(),
+                FontSize = firstChunk.FontSize,
+                IsBold = firstChunk.IsBold,
+                Text = firstChunk.Text.TrimStart(),
+                PageNumber = pageNumber
+            };
         }
 
+
+        // Modified IsLikelyHeading
+        private bool IsLikelyHeading(TextParagraph paragraph, float globalAvgFontSize, float globalStdDevFontSize)
+        {
+            if (string.IsNullOrWhiteSpace(paragraph.Text) || paragraph.Text.Length > 200) // Headings are usually shorter
+                return false;
+
+            // Criteria:
+            // 1. Font size significantly larger than average OR paragraph is bold.
+            // 2. Not ending with typical sentence punctuation.
+            // 3. Relatively short.
+
+            // Threshold: More than 1 standard deviation above average, or slightly above average AND bold
+            bool significantSize = paragraph.FontSize > globalAvgFontSize + globalStdDevFontSize * 0.75f;
+            bool slightlyLargerAndBold = paragraph.IsBold && paragraph.FontSize > globalAvgFontSize + globalStdDevFontSize * 0.25f;
+
+            bool fontCriteriaMet = significantSize || slightlyLargerAndBold;
+
+            bool punctuationCriteriaMet = !Regex.IsMatch(paragraph.Text.TrimEnd(), @"[.?!:]$");
+
+            // Additional check: Less likely to be a heading if it contains multiple sentences.
+            bool likelySingleSentence = Regex.Matches(paragraph.Text, @"[.?!]").Count <= 1;
+
+            return fontCriteriaMet && punctuationCriteriaMet && likelySingleSentence;
+        }
+
+        // DetermineHeadingLevel (consider using boldness)
         private int DetermineHeadingLevel(TextParagraph paragraph, List<TextParagraph> allParagraphs)
         {
-            var headingParagraphs = allParagraphs
-                .Where(p => IsLikelyHeading(p, allParagraphs))
-                .Select(p => p.FontSize)
+            // Recalculate global stats for context
+            var validFontSizes = allParagraphs.Where(p => p.FontSize > 0).Select(p => p.FontSize).ToList();
+            float globalAvgFontSize = validFontSizes.Count > 0 ? validFontSizes.Average() : 10f;
+            float globalStdDevFontSize = validFontSizes.Count > 1 ? (float)Math.Sqrt(validFontSizes.Average(v => Math.Pow(v - globalAvgFontSize, 2))) : 1f;
+
+
+            var distinctHeadingStyles = allParagraphs
+                .Where(p => IsLikelyHeading(p, globalAvgFontSize, globalStdDevFontSize))
+                .Select(p => new { p.FontSize, p.IsBold }) // Consider both size and boldness
                 .Distinct()
-                .OrderByDescending(fs => fs)
+                .OrderByDescending(s => s.FontSize) // Primarily order by size
+                .ThenByDescending(s => s.IsBold)   // Then by boldness (bold counts as 'higher')
                 .ToList();
 
-            if (headingParagraphs.Count == 0) return 3; // Default if no distinct heading sizes found
+            if (distinctHeadingStyles.Count == 0) return 3; // Default
 
-            float currentFontSize = paragraph.FontSize;
+            // Find where the current paragraph's style fits in the sorted list
+            int index = distinctHeadingStyles.FindIndex(s => Math.Abs(s.FontSize - paragraph.FontSize) < 0.1f && s.IsBold == paragraph.IsBold);
 
-            // Find index of the current font size in the distinct sorted list
-            int index = headingParagraphs.FindIndex(fs => Math.Abs(fs - currentFontSize) < 0.1f);
+            if (index == -1) return 3; // Not found among distinct styles, treat as lowest level heading
 
-            if (index == 0) return 1; // Largest font size
-            if (index == 1) return 2; // Second largest
-            // All others map to level 3 (or higher if more levels were needed)
-            return 3;
+            if (index == 0) return 1; // Top style
+            if (index == 1) return 2; // Second style
+            return 3;                 // Others
         }
 
+        // IsLikelyTable (Can be significantly improved, basic version retained)
         private bool IsLikelyTable(TextParagraph paragraph)
         {
-            // Refined table detection: Look for multiple columns separated by significant whitespace
-            // and potentially rows with similar structure. This is complex and error-prone with text extraction alone.
-            // Simple heuristic: Multiple instances of 3+ spaces, or multiple pipe characters
             int spaceSequences = Regex.Matches(paragraph.Text, @"\s{3,}").Count;
             int pipeCount = paragraph.Text.Count(c => c == '|');
-
-            // Also check for typical table content like numbers aligned
-            bool hasAlignedNumbers = Regex.IsMatch(paragraph.Text, @"(\s+\d+(\.\d+)?){2,}"); // At least two numbers separated by space
-
-            return (spaceSequences > 1 || pipeCount > 1) && paragraph.Text.Length > 10; // Basic check, could be improved
+            return (spaceSequences > 2 || pipeCount > 2) && paragraph.Text.Length > 15; // Slightly stricter
         }
 
         #endregion
 
-        #region Custom Text Extraction Classes (Copied from PdfDocumentProcessor)
+        #region Custom Text Extraction Classes (Modified)
 
+        // Internal class representing a paragraph candidate
         private class TextParagraph
         {
             public string Text { get; set; } = string.Empty;
             public float Y { get; set; }
             public float FontSize { get; set; }
+            public bool IsBold { get; set; } // Added boldness
+            public int PageNumber { get; set; } // Added page number
         }
 
+        // Internal class representing a raw text chunk from iText
         private class TextChunk
         {
             public string Text { get; set; } = string.Empty;
             public float FontSize { get; set; }
             public required Rectangle Bounds { get; set; }
+            public bool IsBold { get; set; } // Added boldness flag
         }
 
+        // Modified strategy to extract boldness
         private class CustomLocationTextExtractionStrategy : LocationTextExtractionStrategy
         {
             private readonly List<TextChunk> _textChunks = new List<TextChunk>();
@@ -378,34 +419,49 @@ namespace ollamidesk.RAG.Services.Implementations // Changed namespace to match 
                 {
                     TextRenderInfo renderInfo = (TextRenderInfo)data;
                     string text = renderInfo.GetText();
-                    if (string.IsNullOrWhiteSpace(text)) return; // Ignore whitespace chunks
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        base.EventOccurred(data, type);
+                        return;
+                    }
 
                     float fontSize = renderInfo.GetFontSize();
-                    // Correct way to get bounding box in iText 7/8
                     LineSegment baseline = renderInfo.GetBaseline();
                     Vector startPoint = baseline.GetStartPoint();
                     Vector endPoint = baseline.GetEndPoint();
-                    float ascent = renderInfo.GetAscentLine().GetStartPoint().Get(Vector.I2); // Approx height based on ascent
-                    float descent = renderInfo.GetDescentLine().GetStartPoint().Get(Vector.I2); // Approx height based on descent
+                    float ascent = renderInfo.GetAscentLine().GetStartPoint().Get(Vector.I2);
+                    float descent = renderInfo.GetDescentLine().GetStartPoint().Get(Vector.I2);
 
-
-                    // Create a rectangle approximating the text bounds
                     Rectangle textRectangle = new Rectangle(
-                         startPoint.Get(Vector.I1), // x
-                         descent, // y (bottom)
-                         Math.Max(1, endPoint.Get(Vector.I1) - startPoint.Get(Vector.I1)), // width (ensure positive)
-                         Math.Max(1, ascent - descent) // height (ensure positive)
+                         startPoint.Get(Vector.I1),
+                         descent,
+                         Math.Max(1, endPoint.Get(Vector.I1) - startPoint.Get(Vector.I1)),
+                         Math.Max(1, ascent - descent)
                      );
 
+                    // --- Detect Boldness ---
+                    bool isBold = false;
+                    try
+                    {
+                        var font = renderInfo.GetFont().GetFontProgram();
+                        if (font != null)
+                        {
+                            string fontName = font.GetFontNames().GetFontName().ToLowerInvariant();
+                            isBold = BoldSubstrings.Any(sub => fontName.Contains(sub));
+                        }
+                    }
+                    catch { /* Ignore font access errors */ }
+                    // ---------------------
 
                     _textChunks.Add(new TextChunk
                     {
                         Text = text,
                         FontSize = fontSize,
-                        Bounds = textRectangle
+                        Bounds = textRectangle,
+                        IsBold = isBold // Store boldness
                     });
                 }
-                base.EventOccurred(data, type); // Call base method
+                base.EventOccurred(data, type);
             }
 
             public List<TextChunk> GetTextChunks() => _textChunks;

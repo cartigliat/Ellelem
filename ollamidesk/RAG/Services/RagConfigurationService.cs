@@ -1,3 +1,4 @@
+// ollamidesk/RAG/Services/RagConfigurationService.cs
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -21,7 +22,7 @@ namespace ollamidesk.RAG.Services
         private int _chunkOverlap;
         private int _maxRetrievedChunks;
         private float _minSimilarityScore;
-        private bool _useSemanticChunking;
+        private bool _useSemanticChunking; // Keep the private field
         private int _embeddingBatchSize;
         private int _embeddingModelDimension;
 
@@ -31,7 +32,7 @@ namespace ollamidesk.RAG.Services
         /// <summary>
         /// Initializes a new instance of the RagConfigurationService class.
         /// </summary>
-        /// <param name="initialSettings">Initial RAG settings</param>
+        /// <param name="initialSettings">Initial RAG settings (loaded from appsettings.json)</param>
         /// <param name="configProvider">Configuration provider</param>
         /// <param name="diagnostics">Diagnostics service</param>
         public RagConfigurationService(
@@ -42,15 +43,16 @@ namespace ollamidesk.RAG.Services
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _configProvider = configProvider ?? throw new ArgumentNullException(nameof(configProvider));
 
-            // Initialize from settings
+            // Initialize from settings loaded from the file
             _chunkSize = initialSettings.ChunkSize;
             _chunkOverlap = initialSettings.ChunkOverlap;
             _maxRetrievedChunks = initialSettings.MaxRetrievedChunks;
             _minSimilarityScore = initialSettings.MinSimilarityScore;
             _embeddingBatchSize = initialSettings.EmbeddingBatchSize;
+            _useSemanticChunking = initialSettings.UseSemanticChunking; // <-- Read from initialSettings
 
-            // Default values for any new parameters
-            _useSemanticChunking = false;
+            // Default values for any new parameters NOT in RagSettings yet
+            // _useSemanticChunking = false; // <-- REMOVED THIS LINE
             _embeddingModelDimension = 384; // Default for many embedding models
 
             _diagnostics.Log(DiagnosticLevel.Info, "RagConfigurationService",
@@ -105,14 +107,16 @@ namespace ollamidesk.RAG.Services
         /// <returns>Current RAG settings</returns>
         public RagSettings GetCurrentSettings()
         {
+            // Note: This needs the RagSettings class to have the UseSemanticChunking property.
             return new RagSettings
             {
                 ChunkSize = ChunkSize,
                 ChunkOverlap = ChunkOverlap,
                 MaxRetrievedChunks = MaxRetrievedChunks,
                 MinSimilarityScore = MinSimilarityScore,
-                EmbeddingBatchSize = EmbeddingBatchSize
-                // Note: Extended properties not in RagSettings yet
+                EmbeddingBatchSize = EmbeddingBatchSize,
+                UseSemanticChunking = UseSemanticChunking // <-- Include in returned object
+                // Note: EmbeddingModelDimension not in RagSettings class yet
             };
         }
 
@@ -128,16 +132,15 @@ namespace ollamidesk.RAG.Services
                 // Update the app settings
                 var appSettings = _configProvider.Settings;
 
-                // Update RAG settings
+                // Update RAG settings in the AppSettings object before saving
                 appSettings.Rag.ChunkSize = _chunkSize;
                 appSettings.Rag.ChunkOverlap = _chunkOverlap;
                 appSettings.Rag.MaxRetrievedChunks = _maxRetrievedChunks;
                 appSettings.Rag.MinSimilarityScore = _minSimilarityScore;
                 appSettings.Rag.EmbeddingBatchSize = _embeddingBatchSize;
+                appSettings.Rag.UseSemanticChunking = _useSemanticChunking; // <-- Add this line to save the value
 
-                // Add any new properties to the RagSettings class if needed
-
-                // Save to disk
+                // Save the entire AppSettings object to disk
                 _configProvider.SaveConfiguration();
 
                 _diagnostics.Log(DiagnosticLevel.Info, "RagConfigurationService",
@@ -162,15 +165,16 @@ namespace ollamidesk.RAG.Services
         /// </summary>
         public async Task ResetToDefaultsAsync()
         {
+            // Set properties to desired defaults
             ChunkSize = 400;
             ChunkOverlap = 50;
             MaxRetrievedChunks = 4;
             MinSimilarityScore = 0.3f;
-            UseSemanticChunking = false;
+            UseSemanticChunking = false; // <-- Set desired default here
             EmbeddingModelDimension = 384;
             EmbeddingBatchSize = 15; // Reset to default
 
-            await SaveConfigurationAsync();
+            await SaveConfigurationAsync(); // Save these defaults back
 
             _diagnostics.Log(DiagnosticLevel.Info, "RagConfigurationService",
                 "Reset configuration to defaults");
@@ -190,6 +194,7 @@ namespace ollamidesk.RAG.Services
             MaxRetrievedChunks = settings.MaxRetrievedChunks;
             MinSimilarityScore = settings.MinSimilarityScore;
             EmbeddingBatchSize = settings.EmbeddingBatchSize;
+            UseSemanticChunking = settings.UseSemanticChunking; // <-- Apply value from settings object
 
             await SaveConfigurationAsync();
 

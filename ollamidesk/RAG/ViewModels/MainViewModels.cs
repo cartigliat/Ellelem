@@ -283,30 +283,36 @@ namespace ollamidesk.RAG.ViewModels
                     }
                 }
 
-                // Get chat history for context
-                List<string> historyContext = ChatHistory
-                    .Take(10) // Limit to last 10 messages for context
-                    .Select(m => $"User: {m.UserQuery}\nAssistant: {m.ModelResponse}")
-                    .ToList();
+                // MODIFICATION START: Removed chat history context retrieval
+                // // Get chat history for context
+                // List<string> historyContext = ChatHistory
+                //     .Take(10) // Limit to last 10 messages for context
+                //     .Select(m => $"User: {m.UserQuery}\nAssistant: {m.ModelResponse}")
+                //     .ToList();
+                // MODIFICATION END
 
                 // Generate model response
                 string modelResponse;
 
                 if (usedRag && sources.Count > 0)
                 {
+                    // MODIFICATION START: Pass empty list for historyContext
                     modelResponse = await _modelService.GenerateResponseWithContextAsync(
                         userQuery,
-                        historyContext,
+                        new List<string>(), // Pass empty list instead of historyContext
                         sources
                     ).ConfigureAwait(false);
+                    // MODIFICATION END
                 }
                 else
                 {
+                    // MODIFICATION START: Pass empty list for historyContext
                     modelResponse = await _modelService.GenerateResponseAsync(
                         prompt,
                         string.Empty, // No loaded document, using RAG instead
-                        historyContext
+                        new List<string>() // Pass empty list instead of historyContext
                     ).ConfigureAwait(false);
+                    // MODIFICATION END
                 }
 
                 // Create chat message
@@ -318,7 +324,7 @@ namespace ollamidesk.RAG.ViewModels
                     SourceChunkIds = sources.Select(s => s.Id).ToList()
                 };
 
-                // Add message to chat history
+                // Add message to chat history (keeps UI updated)
                 AddChatMessage(message);
             }
             catch (Exception ex)

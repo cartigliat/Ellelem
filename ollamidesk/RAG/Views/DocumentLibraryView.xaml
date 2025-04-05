@@ -3,8 +3,14 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-             mc:Ignorable="d"
+             xmlns:local="clr-namespace:ollamidesk" mc:Ignorable="d"
              d:DesignHeight="450" d:DesignWidth="300">
+
+	<UserControl.Resources>
+		<BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+		<local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter"/>
+		<local:StatusColorConverter x:Key="StatusColorConverter"/>
+	</UserControl.Resources>
 
 	<Grid>
 		<Grid.RowDefinitions>
@@ -13,13 +19,11 @@
 			<RowDefinition Height="Auto"/>
 		</Grid.RowDefinitions>
 
-		<!-- Header -->
 		<StackPanel Grid.Row="0" Margin="10">
 			<TextBlock Text="Document Library" FontSize="18" FontWeight="Bold"/>
 			<CheckBox Content="Enable RAG" IsChecked="{Binding IsRagEnabled, Mode=TwoWay}" Margin="0,5,0,0"/>
 		</StackPanel>
 
-		<!-- Document List -->
 		<ListView Grid.Row="1"
                   ItemsSource="{Binding Documents}"
                   Margin="10">
@@ -36,30 +40,25 @@
 							<ColumnDefinition Width="Auto"/>
 						</Grid.ColumnDefinitions>
 
-						<!-- Selection Checkbox -->
 						<CheckBox Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
                                   IsChecked="{Binding IsSelected, Mode=TwoWay}"
                                   IsEnabled="{Binding IsProcessed}"
                                   VerticalAlignment="Center"/>
 
-						<!-- Document Info -->
 						<StackPanel Grid.Column="1" Grid.Row="0" Margin="10,0,0,0">
 							<TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
-							<TextBlock Text="{Binding Status}" Foreground="{Binding IsProcessed, Converter={StaticResource StatusColorConverter}}"/>
+							<TextBlock Text="{Binding Status}" VerticalAlignment="Center" Foreground="{Binding IsProcessed, Converter={StaticResource StatusColorConverter}}"/>
 						</StackPanel>
 
-						<!-- File Size Display -->
 						<StackPanel Grid.Column="1" Grid.Row="1" Margin="10,3,0,0" Orientation="Horizontal">
 							<TextBlock Text="{Binding FileSizeDisplay}" FontSize="10" Foreground="Gray"/>
 						</StackPanel>
 
-						<!-- Actions -->
 						<StackPanel Grid.Column="2" Grid.Row="0" Grid.RowSpan="2" Orientation="Vertical">
 							<Button Content="Process"
-                                    Command="{Binding ProcessCommand}"
-                                    Visibility="{Binding IsProcessed, Converter={StaticResource NotProcessedToVisibilityConverter}}"
-                                    Margin="0,0,0,3"
-                                    Padding="5,2"/>
+								   Command="{Binding ProcessCommand}"
+								   Visibility="{Binding IsProcessed, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+								   Margin="0,0,0,3" Padding="5,2"/>
 							<Button Content="Delete"
                                     Command="{Binding DeleteCommand}"
                                     Padding="5,2"/>
@@ -69,18 +68,11 @@
 			</ListView.ItemTemplate>
 		</ListView>
 
-		<!-- Footer Buttons -->
 		<StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10">
-			<Button Content="Add Document"
-                    Command="{Binding AddDocumentCommand}"
-                    Padding="10,5"/>
-			<Button Content="Refresh"
-                    Command="{Binding RefreshCommand}"
-                    Margin="10,0,0,0"
-                    Padding="10,5"/>
+			<Button Content="Add Document" Command="{Binding AddDocumentCommand}" Padding="10,5"/>
+			<Button Content="Refresh" Command="{Binding RefreshCommand}" Margin="10,0,0,0" Padding="10,5"/>
 		</StackPanel>
 
-		<!-- Busy Indicator -->
 		<Border Grid.RowSpan="3"
                 Background="#80000000"
                 Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}">

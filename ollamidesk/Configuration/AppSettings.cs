@@ -99,7 +99,14 @@ namespace ollamidesk.Configuration
         /// <summary>
         /// Number of chunks to process in parallel during embedding generation.
         /// </summary>
-        public int EmbeddingBatchSize { get; set; } = 15; // Keep the default here
+        public int EmbeddingBatchSize { get; set; } = 15; 
+
+        // Keep the default here
+        /// <summary>
+        /// Controls whether semantic chunking strategies should be prioritized.
+        /// </summary>
+        public bool UseSemanticChunking { get; set; } = false; // Add this line (default value 'false')
+
     }
 
     /// <summary>

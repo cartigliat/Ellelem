@@ -1,4 +1,5 @@
-﻿using System;
+﻿// ollamidesk/MainWindow.xaml.cs
+using System;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -40,9 +41,11 @@ namespace ollamidesk
             _diagnosticsUIService.SetupDiagnosticsUI(this);
 
             // Setup initial RAG panel state
+            // Assumes RagPanel is the name of the panel in XAML
             UpdateRagPanelVisibility(_viewModel.DocumentViewModel.IsRagEnabled);
 
             // Make sure the ChatHistoryItemsControl is bound to the ViewModel's ChatHistory
+            // Assumes ChatHistoryItemsControl is the name in XAML
             ChatHistoryItemsControl.ItemsSource = _viewModel.ChatHistory;
 
             // Log initialization
@@ -59,6 +62,7 @@ namespace ollamidesk
         private async void MenuToggleButton_Click(object sender, RoutedEventArgs e)
         {
             // Disable button while processing to prevent multiple clicks
+            // Assumes MenuToggleButton is the name in XAML
             MenuToggleButton.IsEnabled = false;
             try
             {
@@ -73,7 +77,6 @@ namespace ollamidesk
                     {
                         await UpdateModelAsync(sideMenuWindow.SelectedModel);
                     }
-
                 }
             }
             catch (Exception ex)
@@ -96,6 +99,7 @@ namespace ollamidesk
             if (previousModelName != newModelName)
             {
                 // Update UI immediately
+                // Assumes ModelNameTextBlock is the name in XAML
                 ModelNameTextBlock.Text = newModelName;
 
                 // Load the selected model using the factory
@@ -118,6 +122,7 @@ namespace ollamidesk
 
         private async void UserInputTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            // Assumes UserInputTextBox is the name in XAML
             if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
             {
                 e.Handled = true;
@@ -131,6 +136,7 @@ namespace ollamidesk
                         await _viewModel.SendMessageAsync();
 
                         // Scroll to bottom after message is sent
+                        // Assumes ChatHistoryScrollViewer is the name in XAML
                         ChatHistoryScrollViewer.ScrollToBottom();
                     }
                 }
@@ -152,24 +158,30 @@ namespace ollamidesk
         }
 
         // RAG panel visibility handlers
+        // Assumes RagEnableCheckBox is the name in XAML
         private void RagEnableCheckBox_Checked(object sender, RoutedEventArgs e)
         {
             // Show the RAG panel
-            RagPanel.Visibility = Visibility.Visible;
+            // Assumes RagPanel is the name in XAML
+            UpdateRagPanelVisibility(true); // Use helper method
 
             // Log that RAG was enabled
             _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "RAG enabled by user");
         }
 
+        // Assumes RagEnableCheckBox is the name in XAML
         private void RagEnableCheckBox_Unchecked(object sender, RoutedEventArgs e)
         {
             // Hide the RAG panel
-            RagPanel.Visibility = Visibility.Collapsed;
+            // Assumes RagPanel is the name in XAML
+            UpdateRagPanelVisibility(false); // Use helper method
 
             // Log that RAG was disabled
             _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "RAG disabled by user");
         }
 
+        // Helper method to update visibility
+        // Assumes RagPanel is the name in XAML
         private void UpdateRagPanelVisibility(bool isVisible)
         {
             if (RagPanel == null) return;
@@ -177,5 +189,9 @@ namespace ollamidesk
             // Simple visibility toggle without animation
             RagPanel.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
         }
+
+        // No RagSettingsButton_Click handler is needed here for the MVVM approach,
+        // as the button's Command property should be bound in XAML to the
+        // OpenRagSettingsCommand in DocumentViewModel.
     }
 }

@@ -46,6 +46,7 @@ namespace ollamidesk
             _diagnostics.StartOperation("Model.GenerateResponse");
             try
             {
+                // Pass chatHistory here, but ConstructPrompt will ignore it
                 string prompt = ConstructPrompt(userInput, loadedDocument, chatHistory);
 
                 // Use settings for API options
@@ -94,6 +95,7 @@ namespace ollamidesk
             _diagnostics.StartOperation("Model.GenerateResponseWithContext");
             try
             {
+                // Pass chatHistory here, but ConstructPromptWithContext will ignore it
                 string prompt = ConstructPromptWithContext(userInput, chatHistory, relevantChunks);
 
                 // Use settings for API options
@@ -134,6 +136,8 @@ namespace ollamidesk
         }
 
         // Helper to construct the basic prompt
+        // MODIFICATION: The 'chatHistory' parameter is kept in the signature for compatibility with the interface/caller,
+        // but the code block that uses it is removed.
         private string ConstructPrompt(string userInput, string? loadedDocument, List<string>? chatHistory)
         {
             // This logic remains similar to original, focusing on prompt building
@@ -147,7 +151,7 @@ namespace ollamidesk
                 promptBuilder.AppendLine(loadedDocument);
                 promptBuilder.AppendLine("--- End Context ---");
                 promptBuilder.AppendLine();
-                promptBuilder.AppendLine("Question based on the context above and chat history below:");
+                promptBuilder.AppendLine("Question based on the context above:"); // Removed "and chat history below"
                 promptBuilder.AppendLine(userInput);
 
             }
@@ -157,25 +161,27 @@ namespace ollamidesk
                 promptBuilder.AppendLine(userInput);
             }
 
-
-            // Add chat history for context (limited history)
-            if (chatHistory != null && chatHistory.Count > 0)
-            {
-                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Including {chatHistory.Count} chat history messages for context");
-                promptBuilder.AppendLine("\n--- Chat History (Recent first) ---");
-                // Include limited history, e.g., last 5 turns (10 messages)
-                foreach (var message in chatHistory.Take(10).Reverse()) // Take last 10, reverse to show oldest first in prompt context
-                {
-                    promptBuilder.AppendLine(message); // Assuming history contains formatted "User: ..." / "Assistant: ..." lines
-                }
-                promptBuilder.AppendLine("--- End History ---");
-
-            }
+            // MODIFICATION START: Removed chat history appending block
+            // // Add chat history for context (limited history)
+            // if (chatHistory != null && chatHistory.Count > 0)
+            // {
+            //     _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Including {chatHistory.Count} chat history messages for context");
+            //     promptBuilder.AppendLine("\n--- Chat History (Recent first) ---");
+            //     // Include limited history, e.g., last 5 turns (10 messages)
+            //     foreach (var message in chatHistory.Take(10).Reverse()) // Take last 10, reverse to show oldest first in prompt context
+            //     {
+            //         promptBuilder.AppendLine(message); // Assuming history contains formatted "User: ..." / "Assistant: ..." lines
+            //     }
+            //     promptBuilder.AppendLine("--- End History ---");
+            // }
+            // MODIFICATION END
 
             return promptBuilder.ToString();
         }
 
         // Helper to construct the prompt with RAG context
+        // MODIFICATION: The 'chatHistory' parameter is kept in the signature for compatibility with the interface/caller,
+        // but the code block that uses it is removed.
         private string ConstructPromptWithContext(string userInput, List<string>? chatHistory, List<DocumentChunk> relevantChunks)
         {
             // This logic remains similar to original, focusing on prompt building
@@ -208,22 +214,24 @@ namespace ollamidesk
             promptBuilder.AppendLine();
 
 
-            // Add chat history for context (limited history)
-            if (chatHistory != null && chatHistory.Count > 0)
-            {
-                _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Including {chatHistory.Count} chat history messages for context");
-                promptBuilder.AppendLine("\n--- Chat History (Recent first) ---");
-                // Include limited history, e.g., last 5 turns (10 messages)
-                foreach (var message in chatHistory.Take(10).Reverse())
-                {
-                    promptBuilder.AppendLine(message);
-                }
-                promptBuilder.AppendLine("--- End History ---");
-                promptBuilder.AppendLine();
-            }
+            // MODIFICATION START: Removed chat history appending block
+            // // Add chat history for context (limited history)
+            // if (chatHistory != null && chatHistory.Count > 0)
+            // {
+            //     _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Including {chatHistory.Count} chat history messages for context");
+            //     promptBuilder.AppendLine("\n--- Chat History (Recent first) ---");
+            //     // Include limited history, e.g., last 5 turns (10 messages)
+            //     foreach (var message in chatHistory.Take(10).Reverse())
+            //     {
+            //         promptBuilder.AppendLine(message);
+            //     }
+            //     promptBuilder.AppendLine("--- End History ---");
+            //     promptBuilder.AppendLine();
+            // }
+            // MODIFICATION END
 
 
-            promptBuilder.AppendLine("Based on the context and history (if provided), answer the following query:");
+            promptBuilder.AppendLine("Based solely on the context provided above, answer the following query:"); // Reworded prompt instruction
             promptBuilder.AppendLine($"Query: {userInput}");
 
             string fullContext = promptBuilder.ToString();

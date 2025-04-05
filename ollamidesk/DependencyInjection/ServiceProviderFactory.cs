@@ -1,4 +1,5 @@
 // ollamidesk/DependencyInjection/ServiceProviderFactory.cs
+// MODIFIED VERSION - Registered HierarchicalChunkingStrategy
 using System;
 using Microsoft.Extensions.DependencyInjection;
 using ollamidesk.Configuration;
@@ -6,7 +7,7 @@ using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Services;
 using ollamidesk.RAG.Services.Interfaces;
-using ollamidesk.RAG.Services.Implementations;
+using ollamidesk.RAG.Services.Implementations; // <-- ENSURE THIS IS PRESENT
 using ollamidesk.RAG.ViewModels;
 using ollamidesk.Services;
 using ollamidesk.RAG.DocumentProcessors.Interfaces;
@@ -80,9 +81,17 @@ namespace ollamidesk.DependencyInjection
             services.AddSingleton<TextChunkingStrategy>(); // Uses Config, Diagnostics
             services.AddSingleton<CodeChunkingStrategy>(); // Uses Config, Diagnostics
             services.AddSingleton<StructuredChunkingStrategy>(); // Uses Config, Diagnostics, TextChunkingStrategy
-            services.AddSingleton<IChunkingStrategy, TextChunkingStrategy>(sp => sp.GetRequiredService<TextChunkingStrategy>());
+            services.AddSingleton<HierarchicalChunkingStrategy>(); // <-- ADDED registration for the new strategy
+
+            // Register strategies for IEnumerable<IChunkingStrategy>
+            // <<< MODIFIED: Order matters for how ChunkingService might iterate >>>
+            // Register Hierarchical strategy FIRST so it might be checked before Text strategy
+            services.AddSingleton<IChunkingStrategy, HierarchicalChunkingStrategy>(sp => sp.GetRequiredService<HierarchicalChunkingStrategy>()); // <-- ADDED mapping
             services.AddSingleton<IChunkingStrategy, CodeChunkingStrategy>(sp => sp.GetRequiredService<CodeChunkingStrategy>());
-            services.AddSingleton<IChunkingStrategy, StructuredChunkingStrategy>(sp => sp.GetRequiredService<StructuredChunkingStrategy>());
+            services.AddSingleton<IChunkingStrategy, StructuredChunkingStrategy>(sp => sp.GetRequiredService<StructuredChunkingStrategy>()); // Existing structured strategy
+            services.AddSingleton<IChunkingStrategy, TextChunkingStrategy>(sp => sp.GetRequiredService<TextChunkingStrategy>()); // Default/Fallback should ideally be last
+
+            // ChunkingService gets the IEnumerable and the specific TextChunkingStrategy for fallback
             services.AddSingleton<IChunkingService, ChunkingService>(); // Uses IEnumerable<IChunkingStrategy>, TextChunkingStrategy, Diagnostics
 
             // --- Storage Components ---
@@ -94,7 +103,7 @@ namespace ollamidesk.DependencyInjection
             // --- RAG Core Services ---
             services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>(); // Uses IMetadataStore, IContentStore, Diagnostics
             services.AddSingleton<IDocumentManagementService, DocumentManagementService>(); // Uses IDocumentRepository, Diagnostics, DocProcessorFactory
-            services.AddSingleton<IDocumentProcessingService, DocumentProcessingService>(); // Uses Repo, Embedding, VectorStore, Config, Diagnostics, Chunking
+            services.AddSingleton<IDocumentProcessingService, DocumentProcessingService>(); // Uses Repo, Embedding, VectorStore, Config, Diagnostics, Chunking, DocProcessorFactory
             services.AddSingleton<IRetrievalService, RetrievalService>(); // Uses VectorStore, Embedding, Config, Diagnostics
             services.AddSingleton<IPromptEngineeringService, PromptEngineeringService>(); // Uses Diagnostics
 
@@ -112,9 +121,10 @@ namespace ollamidesk.DependencyInjection
             services.AddTransient<MainWindow>();
             services.AddTransient<SideMenuWindow>();
             services.AddTransient<RagDiagnosticWindow>();
+            services.AddTransient<ollamidesk.RAG.Windows.RagSettingsWindow>(); // <-- Add this line
         }
 
-        // New method to initialize database provider after container is built
+        // InitializeDatabaseProvider remains unchanged
         private static void InitializeDatabaseProvider()
         {
             if (_serviceProvider == null)
@@ -125,8 +135,6 @@ namespace ollamidesk.DependencyInjection
             try
             {
                 var dbProvider = _serviceProvider.GetRequiredService<ISqliteConnectionProvider>();
-                // Run initialization asynchronously but don't wait here (fire-and-forget pattern for startup)
-                // Consider proper async handling if startup depends on DB being ready immediately.
                 dbProvider.InitializeDatabaseAsync().ContinueWith(task => {
                     if (task.IsFaulted)
                     {
@@ -137,14 +145,13 @@ namespace ollamidesk.DependencyInjection
             }
             catch (Exception ex)
             {
-                // Log critical failure during provider retrieval or initial sync call attempt
                 var diag = _serviceProvider.GetService<RagDiagnosticsService>();
                 diag?.Log(DiagnosticLevel.Critical, "ServiceProviderFactory", $"Failed to get or initialize database provider: {ex.Message}");
                 Console.WriteLine($"Critical Error: Failed to get or initialize database provider: {ex.Message}");
             }
         }
 
-        // ... (InitializeDiagnostics and GetService methods remain the same) ...
+        // InitializeDiagnostics remains unchanged
         private static void InitializeDiagnostics()
         {
             if (_serviceProvider == null)
@@ -177,6 +184,7 @@ namespace ollamidesk.DependencyInjection
             }
         }
 
+        // GetService remains unchanged
         public static T GetService<T>() where T : notnull
         {
             if (!IsInitialized || _serviceProvider == null) throw new InvalidOperationException("Service provider not initialized.");
