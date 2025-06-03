@@ -1,5 +1,6 @@
-﻿// ollamidesk/MainWindow.xaml.cs
+﻿// ollamidesk/MainWindow.xaml.cs - Enhanced with proper cleanup
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -19,6 +20,8 @@ namespace ollamidesk
         private readonly IOllamaModel _ollamaModel;
         private readonly RagDiagnosticsService _diagnostics;
         private readonly IDiagnosticsUIService _diagnosticsUIService;
+        private readonly CancellationTokenSource _cancellationTokenSource;
+        private bool _isDisposing = false;
 
         // Constructor with DI
         public MainWindow(
@@ -34,6 +37,9 @@ namespace ollamidesk
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _diagnosticsUIService = diagnosticsUIService ?? throw new ArgumentNullException(nameof(diagnosticsUIService));
 
+            // Create cancellation token source for operations
+            _cancellationTokenSource = new CancellationTokenSource();
+
             // Set data context
             DataContext = _viewModel;
 
@@ -41,16 +47,64 @@ namespace ollamidesk
             _diagnosticsUIService.SetupDiagnosticsUI(this);
 
             // Setup initial RAG panel state
-            // Assumes RagPanel is the name of the panel in XAML
             UpdateRagPanelVisibility(_viewModel.DocumentViewModel.IsRagEnabled);
 
             // Make sure the ChatHistoryItemsControl is bound to the ViewModel's ChatHistory
-            // Assumes ChatHistoryItemsControl is the name in XAML
             ChatHistoryItemsControl.ItemsSource = _viewModel.ChatHistory;
 
             // Log initialization
             _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
                 "Application initialized with RAG services");
+
+            // Subscribe to window closing event for cleanup
+            Closing += MainWindow_Closing;
+        }
+
+        private void MainWindow_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            if (!_isDisposing)
+            {
+                _isDisposing = true;
+
+                _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "Window closing - starting cleanup");
+
+                // Cancel any ongoing operations
+                _cancellationTokenSource.Cancel();
+
+                // Allow a brief moment for operations to cancel gracefully
+                try
+                {
+                    // Wait up to 2 seconds for ongoing operations to complete
+                    Task.Delay(2000, CancellationToken.None).Wait();
+                }
+                catch
+                {
+                    // Ignore timeout exceptions during shutdown
+                }
+
+                // Clean up resources
+                CleanupResources();
+
+                _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "Window cleanup completed");
+            }
+        }
+
+        private void CleanupResources()
+        {
+            try
+            {
+                // Clean up diagnostic handlers
+                _diagnosticsUIService?.UnregisterHandlers();
+
+                // Dispose of cancellation token source
+                _cancellationTokenSource?.Dispose();
+
+                _diagnostics.Log(DiagnosticLevel.Debug, "MainWindow", "MainWindow resources cleaned up");
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Warning, "MainWindow", $"Error during MainWindow cleanup: {ex.Message}");
+            }
         }
 
         private void FileExit_Click(object sender, RoutedEventArgs e)
@@ -61,8 +115,11 @@ namespace ollamidesk
 
         private async void MenuToggleButton_Click(object sender, RoutedEventArgs e)
         {
+            // Check if we're disposing to avoid new operations during shutdown
+            if (_isDisposing || _cancellationTokenSource.Token.IsCancellationRequested)
+                return;
+
             // Disable button while processing to prevent multiple clicks
-            // Assumes MenuToggleButton is the name in XAML
             MenuToggleButton.IsEnabled = false;
             try
             {
@@ -87,42 +144,62 @@ namespace ollamidesk
             }
             finally
             {
-                MenuToggleButton.IsEnabled = true;
+                if (!_isDisposing)
+                {
+                    MenuToggleButton.IsEnabled = true;
+                }
             }
         }
 
         private async Task UpdateModelAsync(string newModelName)
         {
+            // Check cancellation token before proceeding
+            if (_cancellationTokenSource.Token.IsCancellationRequested)
+                return;
+
             string previousModelName = _viewModel.ModelName;
 
             // Only reload the model if it's different from the current one
             if (previousModelName != newModelName)
             {
-                // Update UI immediately
-                // Assumes ModelNameTextBlock is the name in XAML
-                ModelNameTextBlock.Text = newModelName;
-
-                // Load the selected model using the factory
-                var factory = ServiceProviderFactory.GetService<OllamaModelFactory>();
-                var selectedModel = factory.CreateModel(newModelName);
-
-                // Test connection in background if possible
-                if (selectedModel is OllamaModel ollamaModel)
+                try
                 {
-                    await ollamaModel.TestConnectionAsync().ConfigureAwait(false);
+                    // Update UI immediately
+                    ModelNameTextBlock.Text = newModelName;
+
+                    // Load the selected model using the factory
+                    var factory = ServiceProviderFactory.GetService<OllamaModelFactory>();
+                    var selectedModel = factory.CreateModel(newModelName);
+
+                    // Test connection in background if possible
+                    if (selectedModel is OllamaModel ollamaModel)
+                    {
+                        await ollamaModel.TestConnectionAsync().ConfigureAwait(false);
+                    }
+
+                    _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
+                        $"Model changed to: {newModelName}");
+
+                    // Update the ViewModel with the new model
+                    _viewModel.UpdateModelService(selectedModel, newModelName);
                 }
-
-                _diagnostics.Log(DiagnosticLevel.Info, "MainWindow",
-                    $"Model changed to: {newModelName}");
-
-                // Update the ViewModel with the new model
-                _viewModel.UpdateModelService(selectedModel, newModelName);
+                catch (OperationCanceledException)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "Model update cancelled during shutdown");
+                }
+                catch (Exception ex)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Error, "MainWindow", $"Error updating model: {ex.Message}");
+                }
             }
         }
 
         private async void UserInputTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
         {
-            // Assumes UserInputTextBox is the name in XAML
+            // Check if we're disposing to avoid new operations during shutdown
+            if (_isDisposing || _cancellationTokenSource.Token.IsCancellationRequested)
+                return;
+
             if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
             {
                 e.Handled = true;
@@ -132,12 +209,22 @@ namespace ollamidesk
                 {
                     if (_viewModel != null)
                     {
-                        // Use the ViewModel's implementation for message handling
-                        await _viewModel.SendMessageAsync();
+                        try
+                        {
+                            // Use the ViewModel's implementation for message handling
+                            await _viewModel.SendMessageAsync();
 
-                        // Scroll to bottom after message is sent
-                        // Assumes ChatHistoryScrollViewer is the name in XAML
-                        ChatHistoryScrollViewer.ScrollToBottom();
+                            // Scroll to bottom after message is sent
+                            ChatHistoryScrollViewer.ScrollToBottom();
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "Message sending cancelled during shutdown");
+                        }
+                        catch (Exception ex)
+                        {
+                            _diagnostics.Log(DiagnosticLevel.Error, "MainWindow", $"Error sending message: {ex.Message}");
+                        }
                     }
                 }
             }
@@ -151,37 +238,34 @@ namespace ollamidesk
         // Add cleanup for resources when closing
         protected override void OnClosed(EventArgs e)
         {
-            base.OnClosed(e);
+            if (!_isDisposing)
+            {
+                CleanupResources();
+            }
 
-            // Clean up diagnostic handlers
-            _diagnosticsUIService.UnregisterHandlers();
+            base.OnClosed(e);
         }
 
         // RAG panel visibility handlers
-        // Assumes RagEnableCheckBox is the name in XAML
         private void RagEnableCheckBox_Checked(object sender, RoutedEventArgs e)
         {
             // Show the RAG panel
-            // Assumes RagPanel is the name in XAML
-            UpdateRagPanelVisibility(true); // Use helper method
+            UpdateRagPanelVisibility(true);
 
             // Log that RAG was enabled
             _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "RAG enabled by user");
         }
 
-        // Assumes RagEnableCheckBox is the name in XAML
         private void RagEnableCheckBox_Unchecked(object sender, RoutedEventArgs e)
         {
             // Hide the RAG panel
-            // Assumes RagPanel is the name in XAML
-            UpdateRagPanelVisibility(false); // Use helper method
+            UpdateRagPanelVisibility(false);
 
             // Log that RAG was disabled
             _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "RAG disabled by user");
         }
 
         // Helper method to update visibility
-        // Assumes RagPanel is the name in XAML
         private void UpdateRagPanelVisibility(bool isVisible)
         {
             if (RagPanel == null) return;
@@ -189,9 +273,5 @@ namespace ollamidesk
             // Simple visibility toggle without animation
             RagPanel.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
         }
-
-        // No RagSettingsButton_Click handler is needed here for the MVVM approach,
-        // as the button's Command property should be bound in XAML to the
-        // OpenRagSettingsCommand in DocumentViewModel.
     }
 }
