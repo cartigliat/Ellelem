@@ -1,5 +1,6 @@
 // ollamidesk/RAG/ViewModels/DocumentItemViewModel.cs
-// MODIFIED VERSION - Removed automatic setting of IsSelected after processing
+// CORRECTED VERSION - Further refined UI threading for collection updates
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -10,7 +11,6 @@ using ollamidesk.Common.MVVM;
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Services.Interfaces;
-using static System.Net.Mime.MediaTypeNames; // Note: This using statement might not be necessary
 
 namespace ollamidesk.RAG.ViewModels
 {
@@ -23,14 +23,14 @@ namespace ollamidesk.RAG.ViewModels
         private bool _isSelected;
         private bool _isProcessing;
         private Document _document;
-        private bool _isProcessed; // Changed to private field with public getter
+        private bool _isProcessed;
 
         public string Id => _document.Id;
         public string Name => _document.Name;
-        public bool IsProcessed // Public getter remains
+        public bool IsProcessed
         {
             get => _isProcessed;
-            private set => SetProperty(ref _isProcessed, value, nameof(Status)); // Notify Status change too
+            private set => SetProperty(ref _isProcessed, value, nameof(Status));
         }
 
         public string FileSizeDisplay => FormatFileSize(_document.FileSize);
@@ -44,7 +44,6 @@ namespace ollamidesk.RAG.ViewModels
                 if (SetProperty(ref _isSelected, value))
                 {
                     _document.IsSelected = value;
-                    // Update selection in the backend asynchronously
                     UpdateSelectionAsync(value).FireAndForget(_diagnostics, "DocumentItemViewModel");
                 }
             }
@@ -53,10 +52,9 @@ namespace ollamidesk.RAG.ViewModels
         public bool IsProcessing
         {
             get => _isProcessing;
-            private set => SetProperty(ref _isProcessing, value, nameof(Status)); // Notify Status change
+            private set => SetProperty(ref _isProcessing, value, nameof(Status));
         }
 
-        // Status property now depends on IsProcessing and IsProcessed
         public string Status => IsProcessing ? "Processing..." : (IsProcessed ? "Processed" : "Not Processed");
 
         public ICommand ProcessCommand { get; }
@@ -75,18 +73,16 @@ namespace ollamidesk.RAG.ViewModels
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _documentRepository = documentRepository ?? throw new ArgumentNullException(nameof(documentRepository));
 
-            // Initialize properties from the document model
             _isProcessed = _document.IsProcessed;
             _isSelected = _document.IsSelected;
 
-            // RelayCommand uses CommandManager.RequerySuggested by default
             ProcessCommand = new RelayCommand(
                 async _ => await ProcessDocumentAsync(),
-                _ => !IsProcessed && !IsProcessing); // Can execute if not already processed or processing
+                _ => !IsProcessed && !IsProcessing);
 
             DeleteCommand = new RelayCommand(
                 async _ => await DeleteDocumentAsync(),
-                _ => !IsProcessing); // Can execute if not currently processing
+                _ => !IsProcessing);
         }
 
         private async Task UpdateSelectionAsync(bool isSelected)
@@ -102,15 +98,12 @@ namespace ollamidesk.RAG.ViewModels
             {
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
                    $"Error updating document selection: {ex.Message}");
-                // Potentially revert UI state or show error
             }
         }
 
         private async Task ProcessDocumentAsync()
         {
-            // Set IsProcessing immediately on the UI thread
             CollectionHelper.ExecuteOnUIThread(() => IsProcessing = true);
-            // CommandManager.InvalidateRequerySuggested(); // Optional: Force CanExecute update
 
             try
             {
@@ -118,47 +111,33 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                    $"Processing document: {Id}");
 
-                // Perform the actual processing (potentially long-running)
                 _document = await _documentProcessingService.ProcessDocumentAsync(_document)
-                    .ConfigureAwait(false); // Stay on background thread after await
+                    .ConfigureAwait(false);
 
-                // Update UI properties on the UI thread after processing completes
                 CollectionHelper.ExecuteOnUIThread(() => {
-                    // Update IsProcessed based on the result from the service
                     IsProcessed = _document.IsProcessed;
-
-                    // <<< MODIFIED: Removed setting IsSelected = true here >>>
-                    // IsSelected = true; // This was already commented out in the original
-
-                    // Explicitly notify Status and IsProcessed changes
                     OnPropertyChanged(nameof(Status));
                     OnPropertyChanged(nameof(IsProcessed));
-
                     _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                        $"UI Updated for document processing finished for: {Id}, Processed: {IsProcessed}");
                 });
-
-
             }
             catch (Exception ex)
             {
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
                    $"Error processing document {Id}: {ex.Message}");
 
-                // Update UI on error (ensure IsProcessed is false)
                 CollectionHelper.ExecuteOnUIThread(() =>
                 {
-                    IsProcessed = false; // Ensure IsProcessed is false on error
-                    OnPropertyChanged(nameof(Status)); // Update status display
+                    IsProcessed = false;
+                    OnPropertyChanged(nameof(Status));
                     MessageBox.Show($"Error processing document '{Name}': {ex.Message}", "Processing Error",
                        MessageBoxButton.OK, MessageBoxImage.Error);
                 });
             }
             finally
             {
-                // Reset IsProcessing on the UI thread in the finally block
                 CollectionHelper.ExecuteOnUIThread(() => IsProcessing = false);
-                // CommandManager.InvalidateRequerySuggested(); // Optional: Force CanExecute update
                 _diagnostics.EndOperation("ProcessDocument");
             }
         }
@@ -166,19 +145,21 @@ namespace ollamidesk.RAG.ViewModels
         private async Task DeleteDocumentAsync()
         {
             bool confirmDelete = false;
-            CollectionHelper.ExecuteOnUIThread(() => {
-                confirmDelete = MessageBox.Show(
-                   $"Are you sure you want to delete '{Name}'?\nThis will remove the document and its processed data.",
-                   "Confirm Delete",
-                   MessageBoxButton.YesNo,
-                   MessageBoxImage.Warning) == MessageBoxResult.Yes;
-            });
 
-            if (!confirmDelete) return;
+            // Step 1: Perform UI confirmation and set IsProcessing on the UI thread synchronously.
+            // RelayCommand ensures this part runs on the UI thread.
+            confirmDelete = MessageBox.Show(
+               $"Are you sure you want to delete '{Name}'?\nThis will remove the document and its processed data.",
+               "Confirm Delete",
+               MessageBoxButton.YesNo,
+               MessageBoxImage.Warning) == MessageBoxResult.Yes;
 
-            // Set IsProcessing to disable buttons during delete
-            CollectionHelper.ExecuteOnUIThread(() => IsProcessing = true);
-            // CommandManager.InvalidateRequerySuggested(); // Optional
+            if (!confirmDelete)
+            {
+                return; // User cancelled deletion
+            }
+
+            IsProcessing = true; // Set IsProcessing on UI thread *before* starting background work
 
             try
             {
@@ -186,16 +167,20 @@ namespace ollamidesk.RAG.ViewModels
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                    $"Deleting document: {Id}");
 
-                await _documentManagementService.DeleteDocumentAsync(Id)
-                    .ConfigureAwait(false);
+                // Step 2: Perform the actual deletion on a background thread.
+                // Use Task.Run and ConfigureAwait(false) to move the blocking work off the UI thread.
+                await Task.Run(async () => {
+                    await _documentManagementService.DeleteDocumentAsync(Id);
+                }).ConfigureAwait(false); // Continue on a thread pool thread after deletion
 
-                // Remove this item from the parent collection
-                var parentViewModel = GetParentViewModel();
-                if (parentViewModel != null)
-                {
-                    // Execute removal on UI thread
-                    CollectionHelper.ExecuteOnUIThread(() => {
-                        var docToRemove = parentViewModel.Documents.FirstOrDefault(dvm => dvm.Id == this.Id); // Safer comparison by Id
+                // Step 3: All UI updates related to the collection must be explicitly marshaled to the UI thread.
+                // The entire block accessing parentViewModel and its Documents collection needs to be on UI thread.
+                CollectionHelper.ExecuteOnUIThread(() => {
+                    var parentViewModel = GetParentViewModel(); // Get parent ViewModel on UI thread
+                    if (parentViewModel != null)
+                    {
+                        // Access and modify the Documents collection on the UI thread
+                        var docToRemove = parentViewModel.Documents.FirstOrDefault(dvm => dvm.Id == this.Id);
                         if (docToRemove != null)
                         {
                             CollectionHelper.RemoveSafely(parentViewModel.Documents, docToRemove);
@@ -205,40 +190,42 @@ namespace ollamidesk.RAG.ViewModels
                         {
                             _diagnostics.Log(DiagnosticLevel.Warning, "DocumentItemViewModel", $"Could not find DocumentItemViewModel instance in parent collection for ID: {Id}");
                         }
-                    });
-                }
-                else
-                {
-                    _diagnostics.Log(DiagnosticLevel.Warning, "DocumentItemViewModel", $"Could not find parent DocumentViewModel to remove item for ID: {Id}");
-                }
+                    }
+                    else
+                    {
+                        _diagnostics.Log(DiagnosticLevel.Warning, "DocumentItemViewModel", $"Could not find parent DocumentViewModel to remove item for ID: {Id}");
+                    }
+                });
 
                 _diagnostics.Log(DiagnosticLevel.Info, "DocumentItemViewModel",
                    $"Document deleted successfully from service: {Id}");
-                // No need to reset IsProcessing if successful, as the item is gone.
             }
             catch (Exception ex)
             {
                 _diagnostics.Log(DiagnosticLevel.Error, "DocumentItemViewModel",
                    $"Error deleting document {Id}: {ex.Message}");
 
-                // Reset IsProcessing if deletion failed
+                // Step 4: Handle errors and update UI on the UI thread.
                 CollectionHelper.ExecuteOnUIThread(() =>
                 {
-                    IsProcessing = false;
+                    IsProcessing = false; // Reset IsProcessing on UI thread
                     MessageBox.Show($"Error deleting document '{Name}': {ex.Message}", "Deletion Error",
                        MessageBoxButton.OK, MessageBoxImage.Error);
                 });
-                // CommandManager.InvalidateRequerySuggested(); // Optional
             }
             finally
             {
-                // Ensure IsProcessing is false if deletion failed and item potentially remains
-                var parentViewModel = GetParentViewModel(); // Re-check parent
-                bool itemStillExists = parentViewModel?.Documents.Any(dvm => dvm.Id == this.Id) ?? false;
-                if (itemStillExists) // Only reset if the item wasn't successfully removed
+                // Ensure IsProcessing is false if deletion failed and item potentially remains.
+                // This 'finally' block ensures it's reset even if the try/catch re-throws.
+                CollectionHelper.ExecuteOnUIThread(() =>
                 {
-                    CollectionHelper.ExecuteOnUIThread(() => IsProcessing = false);
-                }
+                    var parentViewModel = GetParentViewModel();
+                    bool itemStillExists = parentViewModel?.Documents.Any(dvm => dvm.Id == this.Id) ?? false;
+                    if (itemStillExists)
+                    {
+                        IsProcessing = false;
+                    }
+                });
                 _diagnostics.EndOperation("DeleteDocument");
             }
         }

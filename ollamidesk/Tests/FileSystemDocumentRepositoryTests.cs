@@ -5,6 +5,7 @@ using ollamidesk.RAG.Services.Implementations;
 using ollamidesk.RAG.Services.Interfaces;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Exceptions; // For custom exceptions if needed
+using ollamidesk.Configuration;
 using System;
 using System.IO; // For IOException
 using System.Threading.Tasks;
@@ -14,10 +15,10 @@ namespace ollamidesk.Tests.RAG.Services
     [TestClass]
     public class FileSystemDocumentRepositoryTests
     {
-        private Mock<IMetadataStore> _mockMetadataStore;
-        private Mock<IContentStore> _mockContentStore;
-        private Mock<RagDiagnosticsService> _mockDiagnosticsService;
-        private FileSystemDocumentRepository _repository;
+        private Mock<IMetadataStore> _mockMetadataStore = default!; // Initialize to suppress CS8618
+        private Mock<IContentStore> _mockContentStore = default!; // Initialize to suppress CS8618
+        private Mock<RagDiagnosticsService> _mockDiagnosticsService = default!; // Initialize to suppress CS8618
+        private FileSystemDocumentRepository _repository = default!; // Initialize to suppress CS8618
 
         private const string TestDocumentId = "testDocId123";
 
@@ -27,11 +28,8 @@ namespace ollamidesk.Tests.RAG.Services
             _mockMetadataStore = new Mock<IMetadataStore>();
             _mockContentStore = new Mock<IContentStore>();
 
-            // Assuming RagDiagnosticsService has a constructor that can be mocked
-            // or it's an interface itself. If it's a concrete class with dependencies:
-            // _mockDiagnosticsService = new Mock<RagDiagnosticsService>(Mock.Of<ICommandLineInterface>(), Mock.Of<ILogSink>());
-            // For simplicity, if it has a parameterless constructor or can be null:
-            _mockDiagnosticsService = new Mock<RagDiagnosticsService>(null, null); // Adjust if constructor differs
+            // Corrected: Pass a valid DiagnosticsSettings object to the mock constructor
+            _mockDiagnosticsService = new Mock<RagDiagnosticsService>(new DiagnosticsSettings());
 
             _repository = new FileSystemDocumentRepository(
                 _mockMetadataStore.Object,

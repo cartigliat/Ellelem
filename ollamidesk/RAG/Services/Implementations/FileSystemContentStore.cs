@@ -96,7 +96,7 @@ namespace ollamidesk.RAG.Services.Implementations
             }
         }
 
-        public async Task DeleteContentAsync(string documentId)
+        public virtual async Task DeleteContentAsync(string documentId)
         {
             string filePath = GetContentPath(documentId);
             var fileLock = GetFileLock(documentId);

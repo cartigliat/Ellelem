@@ -4,21 +4,20 @@
 		<TargetFramework>net8.0-windows</TargetFramework>
 		<UseWPF>true</UseWPF>
 		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<StartupObject>ollamidesk.App</StartupObject>
 	</PropertyGroup>
 
-	<!-- Force specific package versions to override transitive dependencies -->
 	<ItemGroup>
 		<PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
 		<PackageReference Include="System.Text.Json" Version="8.0.5" />
 	</ItemGroup>
 
 	<ItemGroup>
-		<!-- Updated iText Core packages -->
 		<PackageReference Include="itext" Version="8.0.2" />
 		<PackageReference Include="itext.commons" Version="8.0.2" />
 		<PackageReference Include="itext.bouncy-castle-adapter" Version="8.0.2" />
 
-		<!-- Other packages remain the same -->
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.3" />
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.3" />
 		<PackageReference Include="Microsoft.Extensions.Http" Version="9.0.3" />
@@ -28,10 +27,15 @@
 		<PackageReference Include="Polly" Version="7.2.4" />
 		<PackageReference Include="Polly.Extensions.Http" Version="3.0.0" />
 
-		<!-- Document processing libraries -->
 		<PackageReference Include="DocumentFormat.OpenXml" Version="2.20.0" />
 		<PackageReference Include="Markdig" Version="0.33.0" />
 		<PackageReference Include="Spire.Doc" Version="11.5.12" />
+
+		<PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.0" />
+		<PackageReference Include="MSTest.TestAdapter" Version="3.9.1" />
+		<PackageReference Include="MSTest.TestFramework" Version="3.9.1" />
+		<PackageReference Include="Moq" Version="4.20.72" />
+		<PackageReference Include="coverlet.collector" Version="6.0.4" />
 	</ItemGroup>
 
 	<PropertyGroup>

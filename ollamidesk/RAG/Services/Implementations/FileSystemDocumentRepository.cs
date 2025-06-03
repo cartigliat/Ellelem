@@ -252,7 +252,7 @@ namespace ollamidesk.RAG.Services.Implementations
 
                 _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", $"Successfully deleted all components for document {id}.");
             }
-            catch (Exception ex) // This will catch re-thrown exceptions from the steps above
+            catch (Exception) // This will catch re-thrown exceptions from the steps above
             {
                 // Logging already done in specific catch blocks, but we can add a general error if needed
                 // For example, if the logic itself within this try block had an issue (unlikely here)
