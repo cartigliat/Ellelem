@@ -19,18 +19,21 @@ namespace ollamidesk.RAG.Services.Implementations
     {
         private readonly IMetadataStore _metadataStore;
         private readonly IContentStore _contentStore;
+        private readonly IVectorStore _vectorStore;
         private readonly RagDiagnosticsService _diagnostics;
 
         public FileSystemDocumentRepository(
             IMetadataStore metadataStore,
             IContentStore contentStore,
+            IVectorStore vectorStore,
             RagDiagnosticsService diagnostics)
         {
             _metadataStore = metadataStore ?? throw new ArgumentNullException(nameof(metadataStore));
             _contentStore = contentStore ?? throw new ArgumentNullException(nameof(contentStore));
+            _vectorStore = vectorStore ?? throw new ArgumentNullException(nameof(vectorStore));
             _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
-            _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", "Repository initialized, coordinating metadata and content stores.");
+            _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", "Repository initialized, coordinating metadata, content, and vector stores.");
         }
 
         // Converts metadata to a basic Document object (without content/chunks)
@@ -277,31 +280,81 @@ namespace ollamidesk.RAG.Services.Implementations
             }
         }
 
-        public async Task<DocumentChunk?> GetChunkByIdAsync(string chunkId)
+        /// <summary>
+        /// OPTIMIZED: Gets a chunk by ID using efficient vector store lookup first,
+        /// with optional document filtering for security/performance
+        /// </summary>
+        /// <param name="chunkId">The chunk ID to find</param>
+        /// <param name="allowedDocumentIds">Optional list of document IDs to restrict search to. If null, searches all documents.</param>
+        /// <returns>The chunk if found and allowed, null otherwise</returns>
+        public async Task<DocumentChunk?> GetChunkByIdAsync(string chunkId, List<string>? allowedDocumentIds = null)
         {
             _diagnostics.StartOperation("Repo.GetChunkById");
             try
             {
-                _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository", $"GetChunkByIdAsync ({chunkId}) may be inefficient - loading all metadata.");
-                // This is inefficient: requires loading all metadata, then potentially loading embedding files one by one.
-                // A better approach would involve a different storage mechanism if fast chunk lookup is critical.
-                var allMetadata = await _metadataStore.LoadMetadataAsync().ConfigureAwait(false);
-
-                foreach (var meta in allMetadata.Values)
+                if (string.IsNullOrWhiteSpace(chunkId))
                 {
-                    if (meta.HasEmbeddings)
+                    _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository", "GetChunkByIdAsync called with empty chunkId");
+                    return null;
+                }
+
+                // Step 1: Try vector store first (most efficient)
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Looking up chunk {chunkId} in vector store");
+                var chunk = await _vectorStore.GetChunkByIdAsync(chunkId).ConfigureAwait(false);
+
+                if (chunk != null)
+                {
+                    // Step 2: Check if chunk is from an allowed document (if restriction is specified)
+                    if (allowedDocumentIds != null && allowedDocumentIds.Count > 0)
                     {
-                        var chunks = await _contentStore.LoadEmbeddingsAsync(meta.Id).ConfigureAwait(false);
+                        if (!allowedDocumentIds.Contains(chunk.DocumentId))
+                        {
+                            _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
+                                $"Chunk {chunkId} found but belongs to document {chunk.DocumentId} which is not in allowed list. Access denied.");
+                            return null; // Security: Don't return chunks from non-selected documents
+                        }
+                    }
+
+                    _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
+                        $"Found chunk {chunkId} in vector store from document {chunk.DocumentId}");
+                    return chunk;
+                }
+
+                // Step 3: Fallback to file system search (only if no document restriction OR chunk wasn't found in vector store)
+                _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
+                    $"Chunk {chunkId} not found in vector store, falling back to file system search");
+
+                // If we have document restrictions, only search those documents
+                var documentsToSearch = allowedDocumentIds;
+                if (documentsToSearch == null)
+                {
+                    // No restrictions - get all document metadata (inefficient but comprehensive)
+                    _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
+                        $"GetChunkByIdAsync ({chunkId}) performing inefficient search across all documents");
+                    var allMetadata = await _metadataStore.LoadMetadataAsync().ConfigureAwait(false);
+                    documentsToSearch = allMetadata.Keys.ToList();
+                }
+
+                // Search through the specified documents
+                foreach (var documentId in documentsToSearch)
+                {
+                    var metadata = await _metadataStore.GetMetadataByIdAsync(documentId).ConfigureAwait(false);
+                    if (metadata?.HasEmbeddings == true)
+                    {
+                        var chunks = await _contentStore.LoadEmbeddingsAsync(documentId).ConfigureAwait(false);
                         var foundChunk = chunks?.FirstOrDefault(c => c.Id == chunkId);
                         if (foundChunk != null)
                         {
-                            _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Found chunk {chunkId} in document {meta.Id}");
+                            _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository",
+                                $"Found chunk {chunkId} in file system for document {documentId}");
                             return foundChunk;
                         }
                     }
                 }
-                _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository", $"Chunk {chunkId} not found after checking all documents.");
-                return null; // Or throw KeyNotFoundException
+
+                _diagnostics.Log(DiagnosticLevel.Warning, "FileSystemDocumentRepository",
+                    $"Chunk {chunkId} not found in vector store or file system within allowed documents");
+                return null;
             }
             catch (Exception ex)
             {
@@ -312,6 +365,16 @@ namespace ollamidesk.RAG.Services.Implementations
             {
                 _diagnostics.EndOperation("Repo.GetChunkById");
             }
+        }
+
+        /// <summary>
+        /// Legacy method for backward compatibility - searches all documents
+        /// </summary>
+        /// <param name="chunkId">The chunk ID to find</param>
+        /// <returns>The chunk if found, null otherwise</returns>
+        public async Task<DocumentChunk?> GetChunkByIdAsync(string chunkId)
+        {
+            return await GetChunkByIdAsync(chunkId, allowedDocumentIds: null).ConfigureAwait(false);
         }
 
         // Removed EnsureInitializedAsync, SaveMetadataAsync, file locking logic, Dispose

@@ -70,7 +70,8 @@ namespace ollamidesk.Tests.RAG.Integration
             _sqliteConnectionProvider.InitializeDatabaseAsync().GetAwaiter().GetResult();
             _vectorStore = new SqliteVectorStore(_sqliteConnectionProvider, _diagnosticsService);
 
-            _documentRepository = new FileSystemDocumentRepository(_metadataStore, _contentStore, _diagnosticsService);
+            // FIXED: Updated constructor to include IVectorStore parameter
+            _documentRepository = new FileSystemDocumentRepository(_metadataStore, _contentStore, _vectorStore, _diagnosticsService);
 
             // Mock a simple IDocumentProcessor for the factory
             var mockTextProcessor = new Mock<IDocumentProcessor>();
@@ -204,7 +205,8 @@ namespace ollamidesk.Tests.RAG.Integration
         public async Task DeleteDocument_ContentFileDeletionFails_MetadataAndEmbeddingsAreNotDeleted()
         {
             var failingContentStore = new TestFailureFileSystemContentStore(_storageSettings, _diagnosticsService);
-            var repositoryWithFailingContentStore = new FileSystemDocumentRepository(_metadataStore, failingContentStore, _diagnosticsService);
+            // FIXED: Updated constructor to include IVectorStore parameter
+            var repositoryWithFailingContentStore = new FileSystemDocumentRepository(_metadataStore, failingContentStore, _vectorStore, _diagnosticsService);
             var serviceWithFailingRepo = new DocumentManagementService(repositoryWithFailingContentStore, _diagnosticsService, _documentProcessorFactory);
 
             var document = await AddAndProcessTestDocument("fail_content_delete.txt", "Content for failed deletion test.");

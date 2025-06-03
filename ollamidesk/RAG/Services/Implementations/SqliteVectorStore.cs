@@ -166,6 +166,58 @@ namespace ollamidesk.RAG.Services
             _diagnostics.EndOperation("Store.RemoveVectors");
         }
 
+        // NEW: Implement GetChunkByIdAsync for direct chunk lookup
+        public async Task<DocumentChunk?> GetChunkByIdAsync(string chunkId)
+        {
+            if (string.IsNullOrWhiteSpace(chunkId)) return null;
+
+            _diagnostics.StartOperation("Store.GetChunkById");
+            SQLiteConnection connection = await _connectionProvider.GetConnectionAsync().ConfigureAwait(false);
+
+            try
+            {
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = "SELECT ChunkId, DocumentId, Content, ChunkIndex, Source, VectorJson FROM Chunks WHERE ChunkId = @ChunkId LIMIT 1";
+                    command.Parameters.AddWithValue("@ChunkId", chunkId);
+
+                    using (var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow).ConfigureAwait(false))
+                    {
+                        if (await reader.ReadAsync().ConfigureAwait(false))
+                        {
+                            string vectorJson = reader.GetString(5);
+                            float[]? chunkEmbedding = JsonSerializer.Deserialize<float[]>(vectorJson);
+
+                            var chunk = new DocumentChunk
+                            {
+                                Id = reader.GetString(0),
+                                DocumentId = reader.GetString(1),
+                                Content = reader.GetString(2),
+                                ChunkIndex = reader.GetInt32(3),
+                                Source = reader.GetString(4),
+                                Embedding = chunkEmbedding ?? new float[0] // Fix nullability warning
+                            };
+
+                            _diagnostics.Log(DiagnosticLevel.Debug, "SqliteVectorStore", $"Found chunk {chunkId} in document {chunk.DocumentId}");
+                            return chunk;
+                        }
+                    }
+                }
+
+                _diagnostics.Log(DiagnosticLevel.Debug, "SqliteVectorStore", $"Chunk {chunkId} not found in vector store");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.Log(DiagnosticLevel.Error, "SqliteVectorStore", $"Error getting chunk by ID {chunkId}: {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                _diagnostics.EndOperation("Store.GetChunkById");
+            }
+        }
+
         // Search methods now get connection from provider and handle deserialization here
         public async Task<List<(DocumentChunk Chunk, float Score)>> SearchAsync(float[] queryVector, int limit = 5)
         {

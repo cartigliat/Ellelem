@@ -98,7 +98,8 @@ namespace ollamidesk.DependencyInjection
             services.AddSingleton<IVectorStore, SqliteVectorStore>();
 
             // --- RAG Core Services ---
-            services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>();
+            // ONLY CHANGE: Updated comment to reflect IVectorStore dependency
+            services.AddSingleton<IDocumentRepository, FileSystemDocumentRepository>(); // Uses IMetadataStore, IContentStore, IVectorStore, Diagnostics
             services.AddSingleton<IDocumentManagementService, DocumentManagementService>();
             services.AddSingleton<IDocumentProcessingService, DocumentProcessingService>();
             services.AddSingleton<IRetrievalService, RetrievalService>();

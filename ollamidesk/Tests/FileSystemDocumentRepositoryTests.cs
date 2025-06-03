@@ -17,6 +17,7 @@ namespace ollamidesk.Tests.RAG.Services
     {
         private Mock<IMetadataStore> _mockMetadataStore = default!; // Initialize to suppress CS8618
         private Mock<IContentStore> _mockContentStore = default!; // Initialize to suppress CS8618
+        private Mock<IVectorStore> _mockVectorStore = default!; // Added missing mock
         private Mock<RagDiagnosticsService> _mockDiagnosticsService = default!; // Initialize to suppress CS8618
         private FileSystemDocumentRepository _repository = default!; // Initialize to suppress CS8618
 
@@ -27,13 +28,16 @@ namespace ollamidesk.Tests.RAG.Services
         {
             _mockMetadataStore = new Mock<IMetadataStore>();
             _mockContentStore = new Mock<IContentStore>();
+            _mockVectorStore = new Mock<IVectorStore>(); // Added missing mock initialization
 
             // Corrected: Pass a valid DiagnosticsSettings object to the mock constructor
             _mockDiagnosticsService = new Mock<RagDiagnosticsService>(new DiagnosticsSettings());
 
+            // FIXED: Updated constructor to include IVectorStore parameter
             _repository = new FileSystemDocumentRepository(
                 _mockMetadataStore.Object,
                 _mockContentStore.Object,
+                _mockVectorStore.Object,
                 _mockDiagnosticsService.Object);
         }
 
