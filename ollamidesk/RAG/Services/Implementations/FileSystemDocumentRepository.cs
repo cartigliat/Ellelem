@@ -204,19 +204,72 @@ namespace ollamidesk.RAG.Services.Implementations
         public async Task DeleteDocumentAsync(string id)
         {
             _diagnostics.StartOperation("Repo.DeleteDocument");
+            bool contentDeleted = false;
+            bool embeddingsDeleted = false;
+
             try
             {
-                // Attempt to delete files first, then metadata
-                await _contentStore.DeleteContentAsync(id).ConfigureAwait(false);
-                await _contentStore.DeleteEmbeddingsAsync(id).ConfigureAwait(false);
-                await _metadataStore.DeleteMetadataAsync(id).ConfigureAwait(false); // This handles non-existent metadata gracefully
+                // Step 1: Delete Content
+                try
+                {
+                    _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Attempting to delete content for document {id}.");
+                    await _contentStore.DeleteContentAsync(id).ConfigureAwait(false);
+                    contentDeleted = true;
+                    _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", $"Successfully deleted content for document {id}.");
+                }
+                catch (Exception ex)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Critical, "FileSystemDocumentRepository", $"CRITICAL: Failed to delete content for document {id}. Metadata and embeddings will NOT be deleted to prevent orphaned data. Error: {ex.Message}");
+                    throw; // Re-throw original or a new specific exception
+                }
 
-                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", $"Deleted document {id} (metadata and content files).");
+                // Step 2: Delete Embeddings (only if content deletion was successful)
+                try
+                {
+                    _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Attempting to delete embeddings for document {id}.");
+                    await _contentStore.DeleteEmbeddingsAsync(id).ConfigureAwait(false);
+                    embeddingsDeleted = true;
+                    _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", $"Successfully deleted embeddings for document {id}.");
+                }
+                catch (Exception ex)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Critical, "FileSystemDocumentRepository", $"CRITICAL: Failed to delete embeddings for document {id} (content was deleted). Metadata will NOT be deleted. Error: {ex.Message}");
+                    throw; // Re-throw
+                }
+
+                // Step 3: Delete Metadata (only if content and embeddings deletion were successful)
+                try
+                {
+                    _diagnostics.Log(DiagnosticLevel.Debug, "FileSystemDocumentRepository", $"Attempting to delete metadata for document {id}.");
+                    await _metadataStore.DeleteMetadataAsync(id).ConfigureAwait(false);
+                    _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", $"Successfully deleted metadata for document {id}.");
+                }
+                catch (Exception ex)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Error deleting metadata for document {id} (content and embeddings were deleted). Error: {ex.Message}");
+                    throw; // Re-throw
+                }
+
+                _diagnostics.Log(DiagnosticLevel.Info, "FileSystemDocumentRepository", $"Successfully deleted all components for document {id}.");
             }
-            catch (Exception ex)
+            catch (Exception ex) // This will catch re-thrown exceptions from the steps above
             {
-                _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Error deleting document {id}: {ex.Message}");
-                throw;
+                // Logging already done in specific catch blocks, but we can add a general error if needed
+                // For example, if the logic itself within this try block had an issue (unlikely here)
+                // _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"An unexpected error occurred during the deletion process for document {id}: {ex.Message}");
+                if (!contentDeleted)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Deletion process for document {id} halted: Content deletion failed.");
+                }
+                else if (!embeddingsDeleted)
+                {
+                    _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Deletion process for document {id} halted: Embeddings deletion failed (content was deleted).");
+                }
+                else
+                {
+                    _diagnostics.Log(DiagnosticLevel.Error, "FileSystemDocumentRepository", $"Deletion process for document {id} failed at metadata deletion (content and embeddings were deleted).");
+                }
+                throw; // Ensure the exception is propagated
             }
             finally
             {

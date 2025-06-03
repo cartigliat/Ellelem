@@ -113,6 +113,7 @@ namespace ollamidesk.RAG.Services.Implementations
             {
                 _diagnostics.Log(DiagnosticLevel.Error, "FileSystemContentStore", $"Error deleting content for ID {documentId}: {ex.Message}");
                 // Log error, but might not need to re-throw depending on desired behavior
+                throw;
             }
             finally
             {
@@ -193,6 +194,7 @@ namespace ollamidesk.RAG.Services.Implementations
             {
                 _diagnostics.Log(DiagnosticLevel.Error, "FileSystemContentStore", $"Error deleting embeddings for ID {documentId}: {ex.Message}");
                 // Log error, but might not need to re-throw
+                throw;
             }
             finally
             {
