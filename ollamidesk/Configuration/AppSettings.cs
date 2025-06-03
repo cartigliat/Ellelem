@@ -51,6 +51,19 @@ namespace ollamidesk.Configuration
         public int MaxConcurrentRequests { get; set; } = 3;
 
         /// <summary>
+        /// Controls randomness in model responses. Range: 0.0 (deterministic) to 2.0 (very creative)
+        /// Lower values make output more focused and deterministic, higher values increase creativity and randomness
+        /// </summary>
+        public float Temperature { get; set; } = 0.7f;
+
+        /// <summary>
+        /// Nucleus sampling parameter. Range: 0.0 to 1.0
+        /// Controls diversity by limiting token selection to top probability mass
+        /// Lower values make output more focused, higher values allow more diverse token selection
+        /// </summary>
+        public float TopP { get; set; } = 0.9f;
+
+        /// <summary>
         /// API endpoint for generation requests
         /// </summary>
         public string ApiGenerateEndpoint => $"{ApiBaseUrl}/api/generate";
@@ -99,7 +112,7 @@ namespace ollamidesk.Configuration
         /// <summary>
         /// Number of chunks to process in parallel during embedding generation.
         /// </summary>
-        public int EmbeddingBatchSize { get; set; } = 15; 
+        public int EmbeddingBatchSize { get; set; } = 15;
 
         // Keep the default here
         /// <summary>

@@ -1,5 +1,5 @@
 // ollamidesk/OllamaModel.cs
-// Refactored to use IOllamaApiClient
+// Refactored to use IOllamaApiClient and dynamic model generation parameters
 using System;
 using System.Collections.Generic;
 using System.Linq; // Added for LINQ usage
@@ -36,7 +36,7 @@ namespace ollamidesk
 
             _systemPrompt = _settings.SystemPrompt; // Get system prompt from settings
 
-            _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Model initialized: {modelName} using IOllamaApiClient");
+            _diagnostics.Log(DiagnosticLevel.Info, "OllamaModel", $"Model initialized: {modelName} using IOllamaApiClient with Temperature={_settings.Temperature}, TopP={_settings.TopP}");
             // Removed HttpClientFactory, max concurrent requests log (handled by client)
         }
 
@@ -49,7 +49,7 @@ namespace ollamidesk
                 // Pass chatHistory here, but ConstructPrompt will ignore it
                 string prompt = ConstructPrompt(userInput, loadedDocument, chatHistory);
 
-                // Use settings for API options
+                // Use settings for API options - NOW DYNAMIC!
                 var requestData = new
                 {
                     model = _modelName,
@@ -57,14 +57,13 @@ namespace ollamidesk
                     system = _systemPrompt,
                     options = new
                     {
-                        temperature = 0.7, // Example options from original code
-                        top_p = 0.9
+                        temperature = _settings.Temperature, // Use dynamic value from settings
+                        top_p = _settings.TopP // Use dynamic value from settings
                     },
                     stream = false
                 };
 
-
-                _diagnostics.Log(DiagnosticLevel.Debug, "OllamaModel", $"Calling API Client GenerateAsync for model {_modelName}. Prompt length: {prompt.Length}");
+                _diagnostics.Log(DiagnosticLevel.Debug, "OllamaModel", $"Calling API Client GenerateAsync for model {_modelName}. Prompt length: {prompt.Length}, Temperature: {_settings.Temperature}, TopP: {_settings.TopP}");
                 // Delegate the actual API call
                 string responseText = await _apiClient.GenerateAsync(requestData, _modelName).ConfigureAwait(false);
 
@@ -98,7 +97,7 @@ namespace ollamidesk
                 // Pass chatHistory here, but ConstructPromptWithContext will ignore it
                 string prompt = ConstructPromptWithContext(userInput, chatHistory, relevantChunks);
 
-                // Use settings for API options
+                // Use settings for API options - NOW DYNAMIC!
                 var requestData = new
                 {
                     model = _modelName,
@@ -106,13 +105,13 @@ namespace ollamidesk
                     system = _systemPrompt, // Use the class system prompt
                     options = new
                     {
-                        temperature = 0.7,
-                        top_p = 0.9
+                        temperature = _settings.Temperature, // Use dynamic value from settings
+                        top_p = _settings.TopP // Use dynamic value from settings
                     },
                     stream = false
                 };
 
-                _diagnostics.Log(DiagnosticLevel.Debug, "OllamaModel", $"Calling API Client GenerateAsync for model {_modelName} with context. Prompt length: {prompt.Length}");
+                _diagnostics.Log(DiagnosticLevel.Debug, "OllamaModel", $"Calling API Client GenerateAsync for model {_modelName} with context. Prompt length: {prompt.Length}, Temperature: {_settings.Temperature}, TopP: {_settings.TopP}");
                 // Delegate the actual API call
                 string responseText = await _apiClient.GenerateAsync(requestData, _modelName).ConfigureAwait(false);
 

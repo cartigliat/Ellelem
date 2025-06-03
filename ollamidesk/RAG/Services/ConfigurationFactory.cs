@@ -55,6 +55,8 @@ namespace ollamidesk.Services
                 MaxRetries = 3,
                 RetryDelayMs = 1000,
                 MaxConcurrentRequests = 3,
+                Temperature = 0.7f, // Add default temperature
+                TopP = 0.9f, // Add default top_p
                 SystemPrompt = "You are a helpful AI assistant. If context information is provided, use it to answer the question accurately. " +
                     "If there are multiple relevant pieces of information, synthesize them into a coherent answer. " +
                     "If you don't know the answer based on the provided context, say you don't have enough information."

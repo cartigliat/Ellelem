@@ -25,6 +25,17 @@ namespace ollamidesk.RAG.Services
         // Add this property:
         int EmbeddingBatchSize { get; set; }
 
+        // Model generation parameters
+        /// <summary>
+        /// Controls randomness in model responses. Range: 0.0 (deterministic) to 2.0 (very creative)
+        /// </summary>
+        float Temperature { get; set; }
+
+        /// <summary>
+        /// Nucleus sampling parameter. Range: 0.0 to 1.0
+        /// </summary>
+        float TopP { get; set; }
+
         // Methods
         /// <summary>
         /// Saves configuration changes to disk

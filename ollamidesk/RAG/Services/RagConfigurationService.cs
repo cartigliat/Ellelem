@@ -26,6 +26,10 @@ namespace ollamidesk.RAG.Services
         private int _embeddingBatchSize;
         private int _embeddingModelDimension;
 
+        // ADD THESE TWO LINES:
+        private float _temperature; // ADD: New field for temperature
+        private float _topP; // ADD: New field for top_p
+
         // Modified: Changed to nullable event handler
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -51,12 +55,18 @@ namespace ollamidesk.RAG.Services
             _embeddingBatchSize = initialSettings.EmbeddingBatchSize;
             _useSemanticChunking = initialSettings.UseSemanticChunking; // <-- Read from initialSettings
 
+            // ADD THESE LINES: Initialize model generation parameters from Ollama settings
+            var ollamaSettings = _configProvider.Settings.Ollama;
+            _temperature = ollamaSettings.Temperature;
+            _topP = ollamaSettings.TopP;
+
             // Default values for any new parameters NOT in RagSettings yet
             // _useSemanticChunking = false; // <-- REMOVED THIS LINE
             _embeddingModelDimension = 384; // Default for many embedding models
 
+            // MODIFY THIS LINE: Add temperature and topP to the log
             _diagnostics.Log(DiagnosticLevel.Info, "RagConfigurationService",
-                "Configuration service initialized");
+                $"Configuration service initialized with Temperature={_temperature}, TopP={_topP}");
         }
 
         public int ChunkSize
@@ -101,6 +111,19 @@ namespace ollamidesk.RAG.Services
             set => SetProperty(ref _embeddingBatchSize, value);
         }
 
+        // ADD THESE TWO PROPERTIES:
+        public float Temperature
+        {
+            get => _temperature;
+            set => SetProperty(ref _temperature, value);
+        }
+
+        public float TopP
+        {
+            get => _topP;
+            set => SetProperty(ref _topP, value);
+        }
+
         /// <summary>
         /// Returns a copy of the current RAG settings
         /// </summary>
@@ -117,6 +140,7 @@ namespace ollamidesk.RAG.Services
                 EmbeddingBatchSize = EmbeddingBatchSize,
                 UseSemanticChunking = UseSemanticChunking // <-- Include in returned object
                 // Note: EmbeddingModelDimension not in RagSettings class yet
+                // Note: Temperature and TopP are in OllamaSettings, not RagSettings
             };
         }
 
@@ -140,11 +164,16 @@ namespace ollamidesk.RAG.Services
                 appSettings.Rag.EmbeddingBatchSize = _embeddingBatchSize;
                 appSettings.Rag.UseSemanticChunking = _useSemanticChunking; // <-- Add this line to save the value
 
+                // ADD THESE LINES: Update Ollama settings for model generation parameters
+                appSettings.Ollama.Temperature = _temperature;
+                appSettings.Ollama.TopP = _topP;
+
                 // Save the entire AppSettings object to disk
                 _configProvider.SaveConfiguration();
 
+                // MODIFY THIS LINE: Add temperature and topP to the log
                 _diagnostics.Log(DiagnosticLevel.Info, "RagConfigurationService",
-                    "Configuration saved successfully");
+                    $"Configuration saved successfully with Temperature={_temperature}, TopP={_topP}");
 
                 await Task.CompletedTask; // Just to make it async
             }
@@ -174,10 +203,15 @@ namespace ollamidesk.RAG.Services
             EmbeddingModelDimension = 384;
             EmbeddingBatchSize = 15; // Reset to default
 
+            // ADD THESE LINES: Reset model generation parameters to defaults
+            Temperature = 0.7f;
+            TopP = 0.9f;
+
             await SaveConfigurationAsync(); // Save these defaults back
 
+            // MODIFY THIS LINE: Add temperature and topP to the log
             _diagnostics.Log(DiagnosticLevel.Info, "RagConfigurationService",
-                "Reset configuration to defaults");
+                "Reset configuration to defaults including Temperature=0.7, TopP=0.9");
         }
 
         /// <summary>
@@ -196,10 +230,14 @@ namespace ollamidesk.RAG.Services
             EmbeddingBatchSize = settings.EmbeddingBatchSize;
             UseSemanticChunking = settings.UseSemanticChunking; // <-- Apply value from settings object
 
+            // Note: Temperature and TopP are not part of RagSettings, they stay at current values
+            // If you want to reset them too, you would need to add them to RagSettings or create a separate method
+
             await SaveConfigurationAsync();
 
+            // MODIFY THIS LINE: Update the log message
             _diagnostics.Log(DiagnosticLevel.Info, "RagConfigurationService",
-                "Applied new configuration from settings");
+                "Applied new configuration from settings (Temperature and TopP unchanged)");
         }
 
         // Property change notification methods remain unchanged...
