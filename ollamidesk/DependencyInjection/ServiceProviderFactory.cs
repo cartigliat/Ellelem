@@ -115,7 +115,15 @@ namespace ollamidesk.DependencyInjection
 
             // --- ViewModels & UI Components ---
             services.AddSingleton<DocumentViewModel>();
-            services.AddSingleton<MainViewModel>();
+            services.AddSingleton<MainViewModel>(sp => new MainViewModel(
+                sp.GetRequiredService<IOllamaModel>(),
+                sp.GetRequiredService<DocumentViewModel>(),
+                sp.GetRequiredService<OllamaSettings>(),
+                sp.GetRequiredService<RagDiagnosticsService>(),
+                sp.GetRequiredService<IDiagnosticsUIService>(),
+                sp.GetRequiredService<IRetrievalService>(),
+                sp.GetRequiredService<IPromptEngineeringService>(),
+                sp.GetRequiredService<IRagConfigurationService>()));
             services.AddTransient<MainWindow>();
             services.AddTransient<SideMenuWindow>();
             services.AddTransient<RagDiagnosticWindow>();

@@ -19,8 +19,6 @@ namespace ollamidesk.RAG.ViewModels
         private int _maxRetrievedChunks;
         private float _minSimilarityScore;
         private bool _useSemanticChunking;
-        private float _temperature;
-        private float _topP;
 
         public int ChunkSize
         {
@@ -52,24 +50,6 @@ namespace ollamidesk.RAG.ViewModels
             set => SetProperty(ref _useSemanticChunking, value);
         }
 
-        /// <summary>
-        /// Controls randomness in model responses. Range: 0.0 (deterministic) to 2.0 (very creative)
-        /// </summary>
-        public float Temperature
-        {
-            get => _temperature;
-            set => SetProperty(ref _temperature, Math.Max(0.0f, Math.Min(2.0f, value))); // Clamp to valid range
-        }
-
-        /// <summary>
-        /// Nucleus sampling parameter. Range: 0.0 to 1.0
-        /// </summary>
-        public float TopP
-        {
-            get => _topP;
-            set => SetProperty(ref _topP, Math.Max(0.0f, Math.Min(1.0f, value))); // Clamp to valid range
-        }
-
         // Commands
         public ICommand SaveCommand { get; }
         public ICommand CancelCommand { get; }
@@ -90,8 +70,6 @@ namespace ollamidesk.RAG.ViewModels
             MaxRetrievedChunks = _configService.MaxRetrievedChunks;
             MinSimilarityScore = _configService.MinSimilarityScore;
             UseSemanticChunking = _configService.UseSemanticChunking;
-            Temperature = _configService.Temperature;
-            TopP = _configService.TopP;
 
             // Commands
             SaveCommand = new RelayCommand(_ => SaveAndClose());
@@ -99,7 +77,7 @@ namespace ollamidesk.RAG.ViewModels
             ResetCommand = new RelayCommand(_ => ResetToDefaults());
 
             _diagnostics.Log(DiagnosticLevel.Info, "RagSettingsViewModel",
-                $"Settings view model initialized with Temperature={Temperature}, TopP={TopP}");
+                "Settings view model initialized");
         }
 
         private async void SaveAndClose()
@@ -112,14 +90,12 @@ namespace ollamidesk.RAG.ViewModels
                 _configService.MaxRetrievedChunks = MaxRetrievedChunks;
                 _configService.MinSimilarityScore = MinSimilarityScore;
                 _configService.UseSemanticChunking = UseSemanticChunking;
-                _configService.Temperature = Temperature;
-                _configService.TopP = TopP;
 
                 // Save configuration
                 await _configService.SaveConfigurationAsync();
 
                 _diagnostics.Log(DiagnosticLevel.Info, "RagSettingsViewModel",
-                    $"Settings saved successfully with Temperature={Temperature}, TopP={TopP}");
+                    "Settings saved successfully");
 
                 // Close window
                 _window.DialogResult = true;
@@ -150,11 +126,9 @@ namespace ollamidesk.RAG.ViewModels
                 MaxRetrievedChunks = _configService.MaxRetrievedChunks;
                 MinSimilarityScore = _configService.MinSimilarityScore;
                 UseSemanticChunking = _configService.UseSemanticChunking;
-                Temperature = _configService.Temperature;
-                TopP = _configService.TopP;
 
                 _diagnostics.Log(DiagnosticLevel.Info, "RagSettingsViewModel",
-                    $"Settings reset to defaults including Temperature={Temperature}, TopP={TopP}");
+                    "Settings reset to defaults");
             }
             catch (Exception ex)
             {

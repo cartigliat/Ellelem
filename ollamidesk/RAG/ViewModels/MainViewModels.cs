@@ -64,6 +64,7 @@ namespace ollamidesk.RAG.ViewModels
 
         public ObservableCollection<ChatMessage> ChatHistory { get; } = new ObservableCollection<ChatMessage>();
         public DocumentViewModel DocumentViewModel { get; }
+        public IRagConfigurationService ConfigurationService { get; }
 
         // Commands
         public ICommand SendMessageCommand { get; }
@@ -76,7 +77,8 @@ namespace ollamidesk.RAG.ViewModels
             RagDiagnosticsService diagnostics,
             IDiagnosticsUIService diagnosticsUIService,
             IRetrievalService retrievalService,
-            IPromptEngineeringService promptEngineeringService)
+            IPromptEngineeringService promptEngineeringService,
+            IRagConfigurationService configurationService)
         {
             _modelService = modelService ?? throw new ArgumentNullException(nameof(modelService));
             DocumentViewModel = documentViewModel ?? throw new ArgumentNullException(nameof(documentViewModel));
@@ -85,6 +87,7 @@ namespace ollamidesk.RAG.ViewModels
             _diagnosticsUIService = diagnosticsUIService ?? throw new ArgumentNullException(nameof(diagnosticsUIService));
             _retrievalService = retrievalService ?? throw new ArgumentNullException(nameof(retrievalService));
             _promptEngineeringService = promptEngineeringService ?? throw new ArgumentNullException(nameof(promptEngineeringService));
+            ConfigurationService = configurationService ?? throw new ArgumentNullException(nameof(configurationService));
 
             // Use default model name from settings
             ModelName = _ollamaSettings.DefaultModel;

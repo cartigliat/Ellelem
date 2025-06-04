@@ -20,6 +20,27 @@
 			<Setter Property="HorizontalAlignment" Value="Left"/>
 		</Style>
 
+		<!-- Style for compact parameter controls -->
+		<Style x:Key="CompactSliderStyle" TargetType="Slider">
+			<Setter Property="Margin" Value="5,0"/>
+			<Setter Property="VerticalAlignment" Value="Center"/>
+			<Setter Property="Width" Value="80"/>
+		</Style>
+
+		<Style x:Key="CompactTextBoxStyle" TargetType="TextBox">
+			<Setter Property="Width" Value="40"/>
+			<Setter Property="Margin" Value="2,0"/>
+			<Setter Property="VerticalAlignment" Value="Center"/>
+			<Setter Property="TextAlignment" Value="Center"/>
+			<Setter Property="FontSize" Value="11"/>
+		</Style>
+
+		<Style x:Key="CompactLabelStyle" TargetType="TextBlock">
+			<Setter Property="VerticalAlignment" Value="Center"/>
+			<Setter Property="FontSize" Value="11"/>
+			<Setter Property="Margin" Value="0,0,3,0"/>
+		</Style>
+
 		<BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
 		<local:InverseBooleanToVisibilityConverter x:Key="NotProcessedToVisibilityConverter"/>
 		<local:StatusColorConverter x:Key="StatusColorConverter"/>
@@ -47,10 +68,13 @@
 				<Grid x:Name="ChatPanel" Grid.Column="0">
 					<Grid.RowDefinitions>
 						<RowDefinition Height="Auto"/>
+						<RowDefinition Height="Auto"/>
+						<!-- New row for model parameters -->
 						<RowDefinition Height="*"/>
 						<RowDefinition Height="Auto"/>
 					</Grid.RowDefinitions>
 
+					<!-- Top toolbar with model selection and RAG toggle -->
 					<Grid Grid.Row="0" Background="#F5F5F5">
 						<Grid.ColumnDefinitions>
 							<ColumnDefinition Width="*"/>
@@ -76,8 +100,79 @@
 						</StackPanel>
 					</Grid>
 
+					<!-- NEW: Model Generation Parameters Panel -->
+					<Expander Grid.Row="1" Header="Model Settings" Background="#FAFAFA" BorderBrush="#E0E0E0" BorderThickness="0,1,0,1">
+						<Grid Margin="15,10">
+							<Grid.RowDefinitions>
+								<RowDefinition Height="Auto"/>
+								<RowDefinition Height="Auto"/>
+								<RowDefinition Height="Auto"/>
+							</Grid.RowDefinitions>
+
+							<!-- Temperature Control -->
+							<StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,2">
+								<TextBlock Text="Temperature:" Style="{StaticResource CompactLabelStyle}" Width="70"/>
+								<Slider Name="TemperatureSlider"
+                                        Style="{StaticResource CompactSliderStyle}"
+                                        Minimum="0.0" Maximum="2.0"
+                                        Value="{Binding ConfigurationService.Temperature, Mode=TwoWay}"
+                                        TickFrequency="0.1"
+                                        IsSnapToTickEnabled="True"/>
+								<TextBox Text="{Binding ConfigurationService.Temperature, StringFormat=F1, Mode=TwoWay}"
+                                         Style="{StaticResource CompactTextBoxStyle}"/>
+								<TextBlock Text="(0.0=deterministic, 2.0=creative)"
+                                           Style="{StaticResource CompactLabelStyle}"
+                                           FontStyle="Italic"
+                                           Foreground="Gray"
+                                           Margin="8,0,0,0"/>
+							</StackPanel>
+
+							<!-- Top-P Control -->
+							<StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,2">
+								<TextBlock Text="Top-P:" Style="{StaticResource CompactLabelStyle}" Width="70"/>
+								<Slider Name="TopPSlider"
+                                        Style="{StaticResource CompactSliderStyle}"
+                                        Minimum="0.0" Maximum="1.0"
+                                        Value="{Binding ConfigurationService.TopP, Mode=TwoWay}"
+                                        TickFrequency="0.05"
+                                        IsSnapToTickEnabled="True"/>
+								<TextBox Text="{Binding ConfigurationService.TopP, StringFormat=F2, Mode=TwoWay}"
+                                         Style="{StaticResource CompactTextBoxStyle}"/>
+								<TextBlock Text="(0.1=focused, 1.0=diverse)"
+                                           Style="{StaticResource CompactLabelStyle}"
+                                           FontStyle="Italic"
+                                           Foreground="Gray"
+                                           Margin="8,0,0,0"/>
+							</StackPanel>
+
+							<!-- Quick Presets -->
+							<StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,2">
+								<TextBlock Text="Presets:" Style="{StaticResource CompactLabelStyle}" Width="70"/>
+								<Button Content="Conservative"
+                                        Click="SetConservativePreset_Click"
+                                        Padding="8,2"
+                                        Margin="2,0"
+                                        FontSize="11"
+                                        ToolTip="Temperature: 0.3, Top-P: 0.7"/>
+								<Button Content="Balanced"
+                                        Click="SetBalancedPreset_Click"
+                                        Padding="8,2"
+                                        Margin="2,0"
+                                        FontSize="11"
+                                        ToolTip="Temperature: 0.7, Top-P: 0.9"/>
+								<Button Content="Creative"
+                                        Click="SetCreativePreset_Click"
+                                        Padding="8,2"
+                                        Margin="2,0"
+                                        FontSize="11"
+                                        ToolTip="Temperature: 1.2, Top-P: 0.95"/>
+							</StackPanel>
+						</Grid>
+					</Expander>
+
+					<!-- Chat History -->
 					<ScrollViewer x:Name="ChatHistoryScrollViewer"
-                                  Grid.Row="1"
+                                  Grid.Row="2"
                                   VerticalScrollBarVisibility="Auto">
 						<ItemsControl x:Name="ChatHistoryItemsControl" ItemsSource="{Binding ChatHistory}">
 							<ItemsControl.ItemTemplate>
@@ -115,7 +210,8 @@
 						</ItemsControl>
 					</ScrollViewer>
 
-					<Grid Grid.Row="2" Background="#F5F5F5">
+					<!-- Input Area -->
+					<Grid Grid.Row="3" Background="#F5F5F5">
 						<TextBox x:Name="UserInputTextBox"
                                  Text="{Binding UserInput, UpdateSourceTrigger=PropertyChanged}"
                                  Margin="10"
@@ -129,8 +225,9 @@
                                  MaxHeight="150"/>
 					</Grid>
 
+					<!-- Loading Indicator -->
 					<Border x:Name="LoadingIndicator"
-                            Grid.RowSpan="3"
+                            Grid.RowSpan="4"
                             Background="#80000000"
                             Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}">
 						<StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
@@ -145,6 +242,7 @@
 					</Border>
 				</Grid>
 
+				<!-- RAG Panel (unchanged) -->
 				<Grid x:Name="RagPanel" Grid.Column="1" Width="300" Background="White"
                       Visibility="Collapsed" Panel.ZIndex="1">
 					<Grid.RowDefinitions>

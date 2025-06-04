@@ -273,5 +273,36 @@ namespace ollamidesk
             // Simple visibility toggle without animation
             RagPanel.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
         }
+
+        // Add these methods to MainWindow.xaml.cs
+        private void SetConservativePreset_Click(object sender, RoutedEventArgs e)
+        {
+            if (_viewModel?.ConfigurationService != null)
+            {
+                _viewModel.ConfigurationService.Temperature = 0.3f;
+                _viewModel.ConfigurationService.TopP = 0.7f;
+                _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "Applied Conservative preset (Temp: 0.3, TopP: 0.7)");
+            }
+        }
+
+        private void SetBalancedPreset_Click(object sender, RoutedEventArgs e)
+        {
+            if (_viewModel?.ConfigurationService != null)
+            {
+                _viewModel.ConfigurationService.Temperature = 0.7f;
+                _viewModel.ConfigurationService.TopP = 0.9f;
+                _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "Applied Balanced preset (Temp: 0.7, TopP: 0.9)");
+            }
+        }
+
+        private void SetCreativePreset_Click(object sender, RoutedEventArgs e)
+        {
+            if (_viewModel?.ConfigurationService != null)
+            {
+                _viewModel.ConfigurationService.Temperature = 1.2f;
+                _viewModel.ConfigurationService.TopP = 0.95f;
+                _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "Applied Creative preset (Temp: 1.2, TopP: 0.95)");
+            }
+        }
     }
 }
