@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media.Animation; // Added for DoubleAnimation
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Services;
 using ollamidesk.RAG.Services.Interfaces;
@@ -235,6 +236,39 @@ namespace ollamidesk
             }
         }
 
+        private async void SendButton_Click(object sender, RoutedEventArgs e)
+        {
+            // Check if we're disposing to avoid new operations during shutdown
+            if (_isDisposing || _cancellationTokenSource.Token.IsCancellationRequested)
+                return;
+
+            // Send the message
+            if (!string.IsNullOrWhiteSpace(UserInputTextBox.Text))
+            {
+                if (_viewModel != null)
+                {
+                    try
+                    {
+                        // Use the ViewModel's implementation for message handling
+                        await _viewModel.SendMessageAsync();
+
+                        // Scroll to bottom after message is sent
+                        ChatHistoryScrollViewer.ScrollToBottom();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _diagnostics.Log(DiagnosticLevel.Info, "MainWindow", "Message sending cancelled during shutdown");
+                    }
+                    catch (Exception ex)
+                    {
+                        _diagnostics.Log(DiagnosticLevel.Error, "MainWindow", $"Error sending message from SendButton: {ex.Message}");
+                        // Optionally, show a message to the user, though the ViewModel might handle this
+                        // MessageBox.Show($"Error sending message: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    }
+                }
+            }
+        }
+
         // Add cleanup for resources when closing
         protected override void OnClosed(EventArgs e)
         {
@@ -270,8 +304,20 @@ namespace ollamidesk
         {
             if (RagPanel == null) return;
 
-            // Simple visibility toggle without animation
-            RagPanel.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
+            double durationSeconds = 0.3; // Animation duration
+
+            if (isVisible)
+            {
+                RagPanel.Visibility = Visibility.Visible;
+                DoubleAnimation fadeInAnimation = new DoubleAnimation(0, 1, TimeSpan.FromSeconds(durationSeconds));
+                RagPanel.BeginAnimation(UIElement.OpacityProperty, fadeInAnimation);
+            }
+            else
+            {
+                DoubleAnimation fadeOutAnimation = new DoubleAnimation(1, 0, TimeSpan.FromSeconds(durationSeconds));
+                fadeOutAnimation.Completed += (s, _) => RagPanel.Visibility = Visibility.Collapsed;
+                RagPanel.BeginAnimation(UIElement.OpacityProperty, fadeOutAnimation);
+            }
         }
 
         // Add these methods to MainWindow.xaml.cs

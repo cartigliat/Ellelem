@@ -19,67 +19,107 @@
 			<RowDefinition Height="Auto"/>
 		</Grid.RowDefinitions>
 
-		<StackPanel Grid.Row="0" Margin="10">
-			<TextBlock Text="Document Library" FontSize="18" FontWeight="Bold"/>
-			<CheckBox Content="Enable RAG" IsChecked="{Binding IsRagEnabled, Mode=TwoWay}" Margin="0,5,0,0"/>
-		</StackPanel>
+        <TextBlock Text="Document Library" Grid.Row="0" Margin="10"
+                   FontSize="{StaticResource HeaderFontSize}" FontWeight="Bold"
+                   Style="{StaticResource {x:Type TextBlock}}"/>
 
 		<ListView Grid.Row="1"
                   ItemsSource="{Binding Documents}"
-                  Margin="10">
-			<ListView.ItemTemplate>
-				<DataTemplate>
-					<Grid Margin="0,5">
-						<Grid.RowDefinitions>
-							<RowDefinition Height="Auto"/>
-							<RowDefinition Height="Auto"/>
-						</Grid.RowDefinitions>
-						<Grid.ColumnDefinitions>
-							<ColumnDefinition Width="Auto"/>
-							<ColumnDefinition Width="*"/>
-							<ColumnDefinition Width="Auto"/>
-						</Grid.ColumnDefinitions>
+                  Margin="10"
+                  Style="{StaticResource {x:Type ListView}}"
+                  HorizontalContentAlignment="Stretch"> <!-- Ensure items stretch -->
+            <ListView.ItemTemplate>
+                <DataTemplate>
+                    <Border Background="{StaticResource SecondaryBackgroundBrush}"
+                            BorderBrush="{StaticResource BorderColorBrush}"
+                            BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/> <!-- CheckBox -->
+                                <ColumnDefinition Width="*"/>   <!-- Details -->
+                                <ColumnDefinition Width="Auto"/> <!-- Actions -->
+                            </Grid.ColumnDefinitions>
 
-						<CheckBox Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
-                                  IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                  IsEnabled="{Binding IsProcessed}"
-                                  VerticalAlignment="Center"/>
+                            <!-- Column 0: Selection CheckBox -->
+                            <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                      IsEnabled="{Binding IsProcessed}" VerticalAlignment="Center" Margin="0,0,10,0"
+                                      Style="{StaticResource {x:Type CheckBox}}"/>
 
-						<StackPanel Grid.Column="1" Grid.Row="0" Margin="10,0,0,0">
-							<TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
-							<TextBlock Text="{Binding Status}" VerticalAlignment="Center" Foreground="{Binding IsProcessed, Converter={StaticResource StatusColorConverter}}"/>
-						</StackPanel>
+                            <!-- Column 1: Document Details -->
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="{StaticResource BaseFontSize}" Foreground="{StaticResource PrimaryForegroundBrush}" TextTrimming="CharacterEllipsis"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <TextBlock Text="Type: " FontSize="{StaticResource SmallFontSize}" Foreground="{StaticResource SecondaryForegroundBrush}"/>
+                                    <TextBlock Text="{Binding DocumentType}" FontSize="{StaticResource SmallFontSize}" Foreground="{StaticResource SecondaryForegroundBrush}" Margin="0,0,10,0"/>
+                                    <TextBlock Text="Size: " FontSize="{StaticResource SmallFontSize}" Foreground="{StaticResource SecondaryForegroundBrush}"/>
+                                    <TextBlock Text="{Binding FileSizeDisplay}" FontSize="{StaticResource SmallFontSize}" Foreground="{StaticResource SecondaryForegroundBrush}"/>
+                                </StackPanel>
+                                <!-- Status Indicators -->
+                                <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsProcessing}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <TextBlock Text="✔️" Foreground="LightGreen" FontSize="{StaticResource BaseFontSize}" ToolTip="Processed"
+                                               Visibility="{Binding IsProcessed, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                    <TextBlock Text="⚪" Foreground="{StaticResource SecondaryForegroundBrush}" FontSize="{StaticResource BaseFontSize}" ToolTip="Not Processed"
+                                               Visibility="{Binding IsProcessed, Converter={StaticResource InverseBooleanToVisibilityConverter}}"/>
+                                    <TextBlock Text="{Binding Status}" Margin="5,0,0,0" FontSize="{StaticResource SmallFontSize}" Foreground="{StaticResource SecondaryForegroundBrush}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <!-- Processing Indicator -->
+                                <StackPanel Orientation="Horizontal" Margin="0,3,0,0" VerticalAlignment="Center"
+                                            Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <ProgressBar IsIndeterminate="True" Width="50" Height="10" Margin="0,0,5,0" Style="{StaticResource {x:Type ProgressBar}}"/>
+                                    <TextBlock Text="Processing..." FontSize="{StaticResource SmallFontSize}" Foreground="{StaticResource AccentColor1Brush}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </StackPanel>
 
-						<StackPanel Grid.Column="1" Grid.Row="1" Margin="10,3,0,0" Orientation="Horizontal">
-							<TextBlock Text="{Binding FileSizeDisplay}" FontSize="10" Foreground="Gray"/>
-						</StackPanel>
+                            <!-- Column 2: Action Buttons -->
+                            <StackPanel Grid.Column="2" Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Right">
+                                <Button Command="{Binding ProcessCommand}" ToolTip="Process Document"
+                                        Visibility="{Binding IsProcessed, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                                        Style="{StaticResource {x:Type Button}}" Padding="5" Margin="0,0,0,3">
+                                    <TextBlock Text="▶️" FontSize="14"/> <!-- Process Icon -->
+                                </Button>
+                                <Button Command="{Binding DeleteCommand}" ToolTip="Delete Document"
+                                        Style="{StaticResource {x:Type Button}}" Padding="5">
+                                    <TextBlock Text="🗑️" FontSize="14"/> <!-- Delete Icon -->
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
 
-						<StackPanel Grid.Column="2" Grid.Row="0" Grid.RowSpan="2" Orientation="Vertical">
-							<Button Content="Process"
-								   Command="{Binding ProcessCommand}"
-								   Visibility="{Binding IsProcessed, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
-								   Margin="0,0,0,3" Padding="5,2"/>
-							<Button Content="Delete"
-                                    Command="{Binding DeleteCommand}"
-                                    Padding="5,2"/>
-						</StackPanel>
-					</Grid>
-				</DataTemplate>
-			</ListView.ItemTemplate>
-		</ListView>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10">
+            <Button Command="{Binding AddDocumentCommand}" Padding="8,5" Style="{StaticResource {x:Type Button}}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="➕" Margin="0,0,5,0" VerticalAlignment="Center"/> <!-- Add Icon -->
+                    <TextBlock Text="Add Document" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+            <Button Command="{Binding RefreshCommand}" Margin="10,0,0,0" Padding="8,5" Style="{StaticResource {x:Type Button}}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="🔄" Margin="0,0,5,0" VerticalAlignment="Center"/> <!-- Refresh Icon -->
+                    <TextBlock Text="Refresh" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+        </StackPanel>
 
-		<StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10">
-			<Button Content="Add Document" Command="{Binding AddDocumentCommand}" Padding="10,5"/>
-			<Button Content="Refresh" Command="{Binding RefreshCommand}" Margin="10,0,0,0" Padding="10,5"/>
-		</StackPanel>
-
-		<Border Grid.RowSpan="3"
-                Background="#80000000"
+        <Border Grid.RowSpan="3"
+                Background="#A01E1E1E" <!-- Semi-transparent PrimaryBackgroundBrush -->
                 Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}">
-			<StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-				<TextBlock Text="Working..." Foreground="White" FontSize="16" Margin="0,0,0,10"/>
-				<ProgressBar IsIndeterminate="True" Width="200" Height="10"/>
-			</StackPanel>
-		</Border>
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="Working..." Foreground="{StaticResource PrimaryForegroundBrush}" FontSize="16" Margin="0,0,0,10"/>
+                <ProgressBar IsIndeterminate="True" Width="200" Height="10" Style="{StaticResource {x:Type ProgressBar}}"/>
+            </StackPanel>
+        </Border>
 	</Grid>
 </UserControl>

@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Input;
 using ollamidesk.Common.MVVM;
 using ollamidesk.RAG.Services;
+using ollamidesk.Dialogs; // For CustomConfirmDialog
 using ollamidesk.RAG.Diagnostics;
 
 namespace ollamidesk.RAG.ViewModels
@@ -112,8 +113,17 @@ namespace ollamidesk.RAG.ViewModels
 
         private async void ResetToDefaults()
         {
-            if (MessageBox.Show("Are you sure you want to reset all settings to defaults?",
-                "Confirm Reset", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            var dialog = new CustomConfirmDialog("Confirm Reset", "Are you sure you want to reset all settings to defaults?");
+            // Assuming _window is the RagSettingsWindow, set its owner if it's not already properly owned,
+            // or set owner to Application.Current.MainWindow if _window might not be shown yet or is complex.
+            // For simplicity and consistency with DocumentItemViewModel:
+            if (Application.Current.MainWindow != null && Application.Current.MainWindow.IsLoaded) // Ensure MainWindow is loaded
+                dialog.Owner = Application.Current.MainWindow;
+            else if (_window != null && _window.IsLoaded) // Fallback to owning window if available and loaded
+                dialog.Owner = _window;
+
+            bool? dialogResult = dialog.ShowDialog();
+            if (dialogResult != true) // User did not confirm
                 return;
 
             try

@@ -80,13 +80,6 @@ namespace ollamidesk
 
         // LoadDocumentButton_Click method removed
 
-        private void RagButton_Click(object sender, RoutedEventArgs e)
-        {
-            // Placeholder for future RAG implementation
-            _diagnostics.Log(DiagnosticLevel.Info, "SideMenuWindow", "RAG button clicked");
-            MessageBox.Show("RAG functionality not implemented yet.", "Coming Soon", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-
         private void OkButton_Click(object sender, RoutedEventArgs e)
         {
             DialogResult = true;

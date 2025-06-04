@@ -3,22 +3,11 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:ollamidesk.RAG.Views"
         xmlns:local="clr-namespace:ollamidesk"
-        Title="Ollama Chat" Height="600" Width="1000">
+        Title="Ollama Chat" Height="600" Width="1000"
+        MinWidth="700" MinHeight="400"
+        Opacity="0"> <!-- Start with Opacity 0 -->
 	<Window.Resources>
-		<Style x:Key="UserQueryStyle" TargetType="TextBlock">
-			<Setter Property="Background" Value="#E1F5FE"/>
-			<Setter Property="Padding" Value="10"/>
-			<Setter Property="Margin" Value="10,5"/>
-			<Setter Property="TextWrapping" Value="Wrap"/>
-			<Setter Property="HorizontalAlignment" Value="Right"/>
-		</Style>
-		<Style x:Key="ModelResponseStyle" TargetType="TextBlock">
-			<Setter Property="Background" Value="#F1F8E9"/>
-			<Setter Property="Padding" Value="10"/>
-			<Setter Property="Margin" Value="10,5"/>
-			<Setter Property="TextWrapping" Value="Wrap"/>
-			<Setter Property="HorizontalAlignment" Value="Left"/>
-		</Style>
+		<!-- UserQueryStyle and ModelResponseStyle removed -->
 
 		<!-- Style for compact parameter controls -->
 		<Style x:Key="CompactSliderStyle" TargetType="Slider">
@@ -46,19 +35,20 @@
 		<local:StatusColorConverter x:Key="StatusColorConverter"/>
 	</Window.Resources>
 
+    <Window.Triggers>
+        <EventTrigger RoutedEvent="Window.Loaded">
+            <BeginStoryboard>
+                <Storyboard>
+                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                     From="0.0" To="1.0" Duration="0:0:0.5" /> <!-- 0.5 second fade-in -->
+                </Storyboard>
+            </BeginStoryboard>
+        </EventTrigger>
+    </Window.Triggers>
+
 	<Grid>
 		<DockPanel>
-			<Menu DockPanel.Dock="Top" x:Name="MainMenu">
-				<MenuItem Header="File">
-					<MenuItem Header="Exit" Click="FileExit_Click"/>
-				</MenuItem>
-				<MenuItem Header="Tools">
-					<MenuItem Header="RAG Diagnostics"
-                              Command="{Binding DiagnosticsCommand}"
-                              InputGestureText="Ctrl+Shift+D"/>
-				</MenuItem>
-			</Menu>
-
+			<!-- Menu removed -->
 			<Grid>
 				<Grid.ColumnDefinitions>
 					<ColumnDefinition Width="*"/>
@@ -75,30 +65,47 @@
 					</Grid.RowDefinitions>
 
 					<!-- Top toolbar with model selection and RAG toggle -->
-					<Grid Grid.Row="0" Background="#F5F5F5">
-						<Grid.ColumnDefinitions>
-							<ColumnDefinition Width="*"/>
-							<ColumnDefinition Width="Auto"/>
-						</Grid.ColumnDefinitions>
+                    <Grid Grid.Row="0"> <!-- Background removed to be inherited from global styles -->
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/> <!-- For Settings Button -->
+                            <ColumnDefinition Width="*"/>   <!-- For Model Name / other elements -->
+                            <ColumnDefinition Width="Auto"/> <!-- For RAG Toggle -->
+                        </Grid.ColumnDefinitions>
 
-						<StackPanel Grid.Column="0" Orientation="Horizontal" Margin="10">
-							<TextBlock Text="Model: " FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,5,0"/>
-							<TextBlock x:Name="ModelNameTextBlock" Text="{Binding ModelName}"
-                                       VerticalAlignment="Center"
-                                       FontSize="16"/>
-							<Button x:Name="MenuToggleButton" Content="Change Model" Margin="10,0,0,0"
-                                    Padding="8,3" Click="MenuToggleButton_Click"/>
-						</StackPanel>
+                        <!-- Settings Button (New) -->
+                        <Button x:Name="SettingsButton" Grid.Column="0" Content="⚙️"
+                                VerticalAlignment="Center" Margin="10" Padding="8,5"
+                                ToolTip="Settings">
+                            <Button.ContextMenu>
+                                <ContextMenu Style="{StaticResource {x:Type ContextMenu}}">
+                                    <MenuItem Header="Change Model" Click="MenuToggleButton_Click" Style="{StaticResource {x:Type MenuItem}}"/>
+                                    <MenuItem Header="RAG Diagnostics" Command="{Binding DiagnosticsCommand}" InputGestureText="Ctrl+Shift+D" Style="{StaticResource {x:Type MenuItem}}"/>
+                                    <Separator Style="{StaticResource {x:Type Separator}}"/>
+                                    <MenuItem Header="Exit" Click="FileExit_Click" Style="{StaticResource {x:Type MenuItem}}"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
 
-						<StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0">
-							<CheckBox x:Name="RagEnableCheckBox" Content="Enable RAG"
+                        <!-- Model Name Display (Adjusted) -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="10,0,0,0">
+                            <TextBlock Text="Model: " FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,5,0" Style="{StaticResource {x:Type TextBlock}}"/>
+                            <TextBlock x:Name="ModelNameTextBlock" Text="{Binding ModelName}"
+                                       VerticalAlignment="Center" FontSize="{StaticResource LargeFontSize}"/>
+                        </StackPanel>
+
+                        <!-- RAG Toggle (Existing, ensure it's in the right column) -->
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0">
+                            <TextBlock Text="Enable RAG:" VerticalAlignment="Center" Margin="0,0,5,0" Style="{StaticResource {x:Type TextBlock}}"/>
+                            <CheckBox x:Name="RagEnableCheckBox"
                                       IsChecked="{Binding DocumentViewModel.IsRagEnabled, Mode=TwoWay}"
                                       VerticalAlignment="Center"
                                       Margin="0,0,10,0"
                                       Checked="RagEnableCheckBox_Checked"
-                                      Unchecked="RagEnableCheckBox_Unchecked"/>
-						</StackPanel>
-					</Grid>
+                                      Unchecked="RagEnableCheckBox_Unchecked"
+                                      Style="{StaticResource ModernToggleSwitchStyle}"
+                                      ToolTip="Toggle RAG Panel"/>
+                        </StackPanel>
+                    </Grid>
 
 					<!-- NEW: Model Generation Parameters Panel -->
 					<Expander Grid.Row="1" Header="Model Settings" Background="#FAFAFA" BorderBrush="#E0E0E0" BorderThickness="0,1,0,1">
@@ -174,47 +181,60 @@
 					<ScrollViewer x:Name="ChatHistoryScrollViewer"
                                   Grid.Row="2"
                                   VerticalScrollBarVisibility="Auto">
-						<ItemsControl x:Name="ChatHistoryItemsControl" ItemsSource="{Binding ChatHistory}">
-							<ItemsControl.ItemTemplate>
-								<DataTemplate>
-									<StackPanel>
-										<TextBlock Text="{Binding UserQuery}"
-                                                   Style="{StaticResource UserQueryStyle}"/>
+                        <ItemsControl x:Name="ChatHistoryItemsControl" ItemsSource="{Binding ChatHistory}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,0,10">
+                                        <!-- User Query -->
+                                        <Border Background="{StaticResource SecondaryBackgroundBrush}"
+                                                HorizontalAlignment="Right"
+                                                Padding="10" Margin="50,5,10,5" CornerRadius="10" MaxWidth="500"
+                                                Visibility="{Binding UserQuery, Converter={StaticResource StringToVisibilityWithCollapseConverter}}">
+                                            <TextBlock Text="{Binding UserQuery}" TextWrapping="Wrap" Foreground="{StaticResource PrimaryForegroundBrush}"/>
+                                        </Border>
 
-										<StackPanel>
-											<TextBlock Text="{Binding ModelResponse}"
-                                                       Style="{StaticResource ModelResponseStyle}"/>
-
-											<TextBlock Text="Sources used for this response"
-                                                       Visibility="{Binding UsedRag, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                                       Margin="10,0,10,5"
-                                                       FontStyle="Italic"
-                                                       FontSize="11"
-                                                       Foreground="Gray"/>
-
-											<ItemsControl ItemsSource="{Binding SourceChunkIds}"
-                                                          Visibility="{Binding UsedRag, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                                          Margin="20,0,10,10">
-												<ItemsControl.ItemTemplate>
-													<DataTemplate>
-														<TextBlock Text="{Binding}"
-                                                                   FontSize="10"
-                                                                   Foreground="Gray"/>
-													</DataTemplate>
-												</ItemsControl.ItemTemplate>
-											</ItemsControl>
-										</StackPanel>
-									</StackPanel>
-								</DataTemplate>
-							</ItemsControl.ItemTemplate>
-						</ItemsControl>
-					</ScrollViewer>
+                                        <!-- Model Response & Sources -->
+                                        <StackPanel HorizontalAlignment="Left"
+                                                    Visibility="{Binding ModelResponse, Converter={StaticResource StringToVisibilityWithCollapseConverter}}">
+                                            <Border Background="{StaticResource TertiaryBackgroundBrush}"
+                                                    Padding="10" Margin="10,5,50,5" CornerRadius="10" MaxWidth="500">
+                                                <TextBlock Text="{Binding ModelResponse}" TextWrapping="Wrap" Foreground="{StaticResource PrimaryForegroundBrush}"/>
+                                            </Border>
+                                            <StackPanel Visibility="{Binding UsedRag, Converter={StaticResource BooleanToVisibilityConverter}}" Margin="15,0,10,5">
+                                                <TextBlock Text="📄 Sources:" FontSize="{StaticResource SmallFontSize}" Foreground="{StaticResource SecondaryForegroundBrush}" Margin="0,5,0,2"/>
+                                                <ItemsControl ItemsSource="{Binding SourceChunkIds}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <WrapPanel Orientation="Horizontal"/>
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Background="{StaticResource SecondaryBackgroundBrush}" CornerRadius="5" Padding="5,2" Margin="0,0,5,2">
+                                                                <TextBlock Text="{Binding}" FontSize="{StaticResource SmallFontSize}" Foreground="{StaticResource PrimaryForegroundBrush}"/>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
 
 					<!-- Input Area -->
-					<Grid Grid.Row="3" Background="#F5F5F5">
-						<TextBox x:Name="UserInputTextBox"
+                    <Grid Grid.Row="3"> <!-- Removed Background="#F5F5F5" -->
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/> <!-- TextBox takes available space -->
+                            <ColumnDefinition Width="Auto"/> <!-- Button takes its own space -->
+                        </Grid.ColumnDefinitions>
+
+                        <TextBox x:Name="UserInputTextBox"
+                                 Grid.Column="0"
                                  Text="{Binding UserInput, UpdateSourceTrigger=PropertyChanged}"
-                                 Margin="10"
+                                 Margin="10,10,5,10" <!-- Adjusted right margin -->
                                  Padding="5"
                                  FontSize="14"
                                  PreviewKeyDown="UserInputTextBox_PreviewKeyDown"
@@ -222,24 +242,35 @@
                                  TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto"
                                  MinHeight="50"
-                                 MaxHeight="150"/>
-					</Grid>
+                                 MaxHeight="150"
+                                 Style="{StaticResource {x:Type TextBox}}"/> <!-- Ensure global style is applied -->
+
+                        <Button x:Name="SendButton"
+                                Grid.Column="1"
+                                Content="➢"
+                                ToolTip="Send Message"
+                                Click="SendButton_Click"
+                                Style="{StaticResource {x:Type Button}}"
+                                VerticalAlignment="Bottom"
+                                Margin="0,0,10,10" <!-- Align with TextBox bottom margin -->
+                                Padding="12,8"/> <!-- Slightly larger padding for a send button -->
+                    </Grid>
 
 					<!-- Loading Indicator -->
-					<Border x:Name="LoadingIndicator"
+                    <Border x:Name="LoadingIndicator"
                             Grid.RowSpan="4"
-                            Background="#80000000"
+                            Background="#A01E1E1E" <!-- Semi-transparent PrimaryBackgroundBrush -->
                             Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}">
-						<StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-							<TextBlock Text="Generating response..."
-                                       Foreground="White"
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <TextBlock Text="Generating response..."
+                                       Foreground="{StaticResource PrimaryForegroundBrush}" <!-- Themed Foreground -->
                                        FontSize="16"
                                        Margin="0,0,0,10"/>
-							<ProgressBar IsIndeterminate="True"
+                            <ProgressBar IsIndeterminate="True"
                                          Width="200"
-                                         Height="10"/>
-						</StackPanel>
-					</Border>
+                                         Height="10" Style="{StaticResource {x:Type ProgressBar}}"/> <!-- Ensure ProgressBar is styled -->
+                        </StackPanel>
+                    </Border>
 				</Grid>
 
 				<!-- RAG Panel (unchanged) -->

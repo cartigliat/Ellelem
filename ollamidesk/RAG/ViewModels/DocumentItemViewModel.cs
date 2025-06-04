@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using ollamidesk.Common.MVVM;
+using ollamidesk.Dialogs; // For CustomConfirmDialog
 using ollamidesk.RAG.Models;
 using ollamidesk.RAG.Diagnostics;
 using ollamidesk.RAG.Services.Interfaces;
@@ -144,22 +145,22 @@ namespace ollamidesk.RAG.ViewModels
 
         private async Task DeleteDocumentAsync()
         {
-            bool confirmDelete = false;
-
-            // Step 1: Perform UI confirmation and set IsProcessing on the UI thread synchronously.
             // RelayCommand ensures this part runs on the UI thread.
-            confirmDelete = MessageBox.Show(
-               $"Are you sure you want to delete '{Name}'?\nThis will remove the document and its processed data.",
-               "Confirm Delete",
-               MessageBoxButton.YesNo,
-               MessageBoxImage.Warning) == MessageBoxResult.Yes;
+            var dialog = new CustomConfirmDialog("Confirm Delete", $"Are you sure you want to delete '{Name}'?\nThis will remove the document and its processed data.");
+            // To ensure the dialog is owned by the main window and centers correctly:
+            if (System.Windows.Application.Current.MainWindow != null && System.Windows.Application.Current.MainWindow.IsLoaded)
+            {
+                dialog.Owner = System.Windows.Application.Current.MainWindow;
+            }
+            bool? dialogResult = dialog.ShowDialog();
+            bool confirmDelete = dialogResult == true;
 
             if (!confirmDelete)
             {
                 return; // User cancelled deletion
             }
 
-            IsProcessing = true; // Set IsProcessing on UI thread *before* starting background work
+            IsProcessing = true; // Set IsProcessing on UI thread *after* confirmation and *before* starting background work
 
             try
             {
